@@ -14,6 +14,10 @@ quota is left, right at the side of your screen.
 [![Updates](https://img.shields.io/badge/updates-Sparkle-4A90E2)](#updates)
 [![Release](https://img.shields.io/github/v/release/vzandli/GaugeZ?display_name=tag&color=6C5CE7)](https://github.com/vzandli/GaugeZ/releases/latest)
 
+<br>
+
+<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail expanded on the right edge of the screen, with the Codex detail card showing 5-hour and weekly limits">
+
 </div>
 
 ---
