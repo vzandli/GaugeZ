@@ -25,6 +25,9 @@ struct EdgePanelActions {
     var settingsToggle: () -> Void = {}
     var attachmentHover: (Bool) -> Void = { _ in }
     var gearZoneHover: (Bool) -> Void = { _ in }
+    var dragStarted: () -> Void = {}
+    var dragMoved: (CGFloat) -> Void = { _ in }
+    var dragEnded: () -> Void = {}
 }
 
 /// Geometry shared by the views and the window controller. Points.
@@ -128,6 +131,132 @@ struct EdgePanelContentView: View {
     }
 }
 
+// MARK: - Drag handle
+
+struct RailDragHandle: View {
+    let actions: EdgePanelActions
+    @State private var isHovered = false
+    @State private var isDragging = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            NativeDragGrip(
+                onDragStart: {
+                    isDragging = true
+                    actions.dragStarted()
+                },
+                onDragMove: { screenY in
+                    actions.dragMoved(screenY)
+                },
+                onDragEnd: {
+                    isDragging = false
+                    actions.dragEnded()
+                },
+                onHover: { inside in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        isHovered = inside
+                    }
+                }
+            )
+
+            // Visual pill indicator in the top shoulder
+            VStack(spacing: 0) {
+                Spacer().frame(height: 18)
+                Capsule()
+                    .fill(Color.white.opacity(isDragging ? 0.85 : (isHovered ? 0.52 : 0.22)))
+                    .frame(width: isDragging ? 26 : (isHovered ? 24 : 20), height: 3.5)
+                    .shadow(color: .black.opacity(isHovered ? 0.35 : 0), radius: 2, y: 1)
+            }
+            .allowsHitTesting(false)
+        }
+        .frame(width: RailMetrics.expandedWidth, height: RailMetrics.shoulderHeight + RailMetrics.bodyTopInset)
+        .contentShape(Rectangle())
+        .help("Drag vertically to reposition GaugeZ")
+        .accessibilityLabel("Drag handle to reposition GaugeZ vertically")
+    }
+}
+
+private struct NativeDragGrip: NSViewRepresentable {
+    let onDragStart: () -> Void
+    let onDragMove: (CGFloat) -> Void
+    let onDragEnd: () -> Void
+    let onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> DragGripNSView {
+        let view = DragGripNSView()
+        view.onDragStart = onDragStart
+        view.onDragMove = onDragMove
+        view.onDragEnd = onDragEnd
+        view.onHover = onHover
+        return view
+    }
+
+    func updateNSView(_ nsView: DragGripNSView, context: Context) {
+        nsView.onDragStart = onDragStart
+        nsView.onDragMove = onDragMove
+        nsView.onDragEnd = onDragEnd
+        nsView.onHover = onHover
+    }
+}
+
+private final class DragGripNSView: NSView {
+    var onDragStart: (() -> Void)?
+    var onDragMove: ((CGFloat) -> Void)?
+    var onDragEnd: (() -> Void)?
+    var onHover: ((Bool) -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+    private var isDragging = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: isDragging ? .closedHand : .openHand)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if !isDragging {
+            onHover?(false)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isDragging = true
+        NSCursor.closedHand.push()
+        window?.invalidateCursorRects(for: self)
+        onHover?(true)
+        onDragStart?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDragging else { return }
+        onDragMove?(NSEvent.mouseLocation.y)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isDragging else { return }
+        isDragging = false
+        NSCursor.pop()
+        window?.invalidateCursorRects(for: self)
+        let isInside = bounds.contains(convert(event.locationInWindow, from: nil))
+        onHover?(isInside)
+        onDragEnd?()
+    }
+}
+
 // MARK: - Rail
 
 struct EdgeRailView: View {
@@ -176,7 +305,7 @@ struct EdgeRailView: View {
 
     private var expandedContent: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: RailMetrics.shoulderHeight + RailMetrics.bodyTopInset)
+            RailDragHandle(actions: actions)
 
             VStack(spacing: RailMetrics.rowSpacing) {
                 ForEach(Array(providers.enumerated()), id: \.element) { index, provider in

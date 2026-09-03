@@ -19,6 +19,10 @@ final class EdgePanelController {
     private var pointerMonitors: [Any] = []
     /// Pointer position when the window moved away from under it; see `routePointer`.
     private var pendingCollapseOrigin: NSPoint?
+    private var isDragging = false
+    private var dragStartScreenY: CGFloat = 0
+    private var dragStartVerticalPosition: Double = 0.5
+    private var lastSnapHaptic = false
 
     /// Debug aid: GAUGEZ_DEBUG_LOG=<file> mirrors hover events to a file.
     private func debugNote(_ message: String) {
@@ -80,6 +84,12 @@ final class EdgePanelController {
     }
 
     private func routePointer() {
+        if isDragging {
+            if panel.ignoresMouseEvents {
+                panel.ignoresMouseEvents = false
+            }
+            return
+        }
         let location = NSEvent.mouseLocation
         let over = interactiveRects.contains { $0.contains(location) }
         if panel.ignoresMouseEvents == over {
@@ -184,7 +194,10 @@ final class EdgePanelController {
             providerSelect: { [weak self] provider in self?.providerSelected(provider) },
             settingsToggle: { [weak self] in self?.toggleSettings() },
             attachmentHover: { [weak self] inside in self?.attachmentHoverChanged(inside) },
-            gearZoneHover: { [weak self] _ in self?.scheduleDebugSnapshot() }
+            gearZoneHover: { [weak self] _ in self?.scheduleDebugSnapshot() },
+            dragStarted: { [weak self] in self?.dragStarted() },
+            dragMoved: { [weak self] screenY in self?.dragMoved(screenY: screenY) },
+            dragEnded: { [weak self] in self?.dragEnded() }
         )
         let root = EdgePanelContentView(state: state, actions: actions).environmentObject(store)
         let view = NSHostingView(rootView: AnyView(root))
@@ -217,6 +230,18 @@ final class EdgePanelController {
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.edgeSideChanged()
+                }
+            }
+            .store(in: &cancellables)
+
+        store.$verticalPosition
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, !self.isDragging else { return }
+                    self.positionPanel(animated: true)
                 }
             }
             .store(in: &cancellables)
@@ -264,11 +289,12 @@ final class EdgePanelController {
 
     private func railHoverChanged(_ inside: Bool) {
         debugNote("rail hover \(inside)")
+        guard !isDragging else { return }
         isPointerInRail = inside
         collapseTask?.cancel()
         guard store.displayMode == .hover else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isDragging else { return }
             if inside {
                 self.pendingCollapseOrigin = nil
                 self.setExpanded(true)
@@ -280,11 +306,12 @@ final class EdgePanelController {
     }
 
     private func attachmentHoverChanged(_ inside: Bool) {
+        guard !isDragging else { return }
         isPointerInAttachment = inside
         collapseTask?.cancel()
         attachmentTask?.cancel()
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isDragging else { return }
             if inside {
                 self.pendingCollapseOrigin = nil
                 self.setExpanded(true)
@@ -295,9 +322,10 @@ final class EdgePanelController {
     }
 
     private func scheduleCollapse() {
+        guard !isDragging else { return }
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(450))
-            guard !Task.isCancelled, let self, !self.isPointerInRail, !self.isPointerInAttachment else { return }
+            guard !Task.isCancelled, let self, !self.isPointerInRail, !self.isPointerInAttachment, !self.isDragging else { return }
             guard !NSColorPanel.shared.isVisible else { return }
             // Hover exits can be spurious while the window is resizing under the pointer, so trust
             // the pointer's actual position over the last tracking event.
@@ -321,9 +349,10 @@ final class EdgePanelController {
     }
 
     private func providerHoverChanged(_ provider: ProviderID?) {
+        guard !isDragging else { return }
         attachmentTask?.cancel()
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isDragging else { return }
             self.state.hoveredProvider = provider
             guard self.state.attachment != .settings else { return }
 
@@ -459,6 +488,63 @@ final class EdgePanelController {
         try? data.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
     }
 
+    // MARK: - Vertical bounds & Dragging
+
+    private func verticalBounds(screen: NSScreen, height: CGFloat) -> (minY: CGFloat, maxY: CGFloat, range: CGFloat) {
+        let visibleFrame = screen.visibleFrame
+        let verticalMargin: CGFloat = 12
+        let minY = visibleFrame.minY + verticalMargin
+        let maxY = max(minY, visibleFrame.maxY - height - verticalMargin)
+        return (minY, maxY, maxY - minY)
+    }
+
+    private func dragStarted() {
+        debugNote("drag started")
+        isDragging = true
+        dragStartScreenY = NSEvent.mouseLocation.y
+        dragStartVerticalPosition = store.verticalPosition
+        lastSnapHaptic = abs(store.verticalPosition - 0.5) < 0.02
+        collapseTask?.cancel()
+        attachmentTask?.cancel()
+        setAttachment(nil, animated: false)
+        panel.ignoresMouseEvents = false
+    }
+
+    private func dragMoved(screenY: CGFloat) {
+        guard isDragging, let screen = preferredScreen else { return }
+        let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
+        let bounds = verticalBounds(screen: screen, height: height)
+        guard bounds.range > 0 else { return }
+
+        let deltaY = screenY - dragStartScreenY
+        let startY = bounds.minY + bounds.range * CGFloat(dragStartVerticalPosition)
+        let newY = startY + deltaY
+        var newRatio = Double((newY - bounds.minY) / bounds.range)
+
+        // Snap to center (0.5) if within snap threshold
+        let snapThreshold = 0.025
+        let inSnapZone = abs(newRatio - 0.5) < snapThreshold
+        if inSnapZone {
+            newRatio = 0.5
+            if !lastSnapHaptic {
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                lastSnapHaptic = true
+            }
+        } else {
+            lastSnapHaptic = false
+        }
+
+        let clamped = max(0.0, min(1.0, newRatio))
+        store.verticalPosition = clamped
+        positionPanel(animated: false)
+    }
+
+    private func dragEnded() {
+        debugNote("drag ended at \(store.verticalPosition)")
+        isDragging = false
+        routePointer()
+    }
+
     /// The window is always its maximum size and never resizes; transparent areas pass pointer
     /// events through to whatever is behind, so only the drawn rail and cards are interactive.
     private func positionPanel(animated: Bool) {
@@ -468,10 +554,19 @@ final class EdgePanelController {
         let width = RailMetrics.maximumPanelWidth
         let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
         let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX
-        let y = visibleFrame.midY - height / 2
+        let bounds = verticalBounds(screen: screen, height: height)
+        let y = bounds.minY + bounds.range * CGFloat(store.verticalPosition)
         let frame = NSRect(x: x, y: y, width: width, height: height)
         if panel.frame != frame {
-            panel.setFrame(frame, display: true)
+            if animated && !isDragging {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.18
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    panel.animator().setFrame(frame, display: true)
+                }
+            } else {
+                panel.setFrame(frame, display: true)
+            }
         }
     }
 

@@ -433,6 +433,31 @@ private struct AppearanceSettingsPage: View {
                     SettingsRowDivider()
 
                     SettingsControlRow(
+                        title: "Vertical position",
+                        subtitle: "Position along the screen edge"
+                    ) {
+                        HStack(spacing: 8) {
+                            Slider(
+                                value: $store.verticalPosition,
+                                in: 0...1
+                            )
+                            .frame(width: 120)
+                            .controlSize(.small)
+
+                            Button("Center") {
+                                withAnimation(.spring(duration: 0.25, bounce: 0.15)) {
+                                    store.verticalPosition = 0.5
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(abs(store.verticalPosition - 0.5) < 0.005)
+                        }
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsControlRow(
                         title: "Surface",
                         subtitle: "Choose the rail material"
                     ) {

@@ -253,7 +253,7 @@ private struct RateLimitWindow: Decodable {
     }
 }
 
-private enum CodexProviderError: LocalizedError {
+private enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
     case notInstalled
     case timedOut
     case noResponse
@@ -263,12 +263,35 @@ private enum CodexProviderError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notInstalled: "ChatGPT/Codex is not installed"
-        case .timedOut: "Codex did not answer within 12 seconds"
-        case .noResponse: "Codex returned no response"
-        case .malformedResponse: "Codex returned an unsupported response"
-        case .noUsageWindows: "Codex reported no usage windows"
-        case .server(let message): message
+        case .notInstalled: 
+            return "ChatGPT/Codex is not installed."
+        case .timedOut: 
+            return "Codex did not answer within 12 seconds."
+        case .noResponse: 
+            return "Codex returned no response."
+        case .malformedResponse: 
+            return "Codex returned an unsupported response."
+        case .noUsageWindows: 
+            return "Codex reported no usage windows."
+        case .server(let message):
+            if message.contains("404") || message.contains("wham/usage") {
+                return "ChatGPT rate limits are temporarily unavailable."
+            } else if message.contains("401") || message.contains("token") || message.contains("auth") {
+                return "ChatGPT session expired. Sign in inside ChatGPT to refresh."
+            }
+            return message
+        }
+    }
+
+    var providerHealth: ProviderHealth {
+        let text = errorDescription ?? "Codex error"
+        switch self {
+        case .server(let message) where message.contains("401") || message.contains("token") || message.contains("auth"):
+            return .signedOut(text)
+        case .server, .timedOut, .noResponse:
+            return .stale(text)
+        default:
+            return .unavailable(text)
         }
     }
 }

@@ -39,6 +39,17 @@ final class UsageStore: ObservableObject {
     @Published var indicatorColorHex: String {
         didSet { UserDefaults.standard.set(indicatorColorHex, forKey: Keys.indicatorColorHex) }
     }
+    /// Normalized vertical position along the screen edge (0.0 = bottom, 0.5 = middle, 1.0 = top).
+    @Published var verticalPosition: Double {
+        didSet {
+            let clamped = max(0.0, min(1.0, verticalPosition))
+            if clamped != verticalPosition {
+                verticalPosition = clamped
+            } else {
+                UserDefaults.standard.set(clamped, forKey: Keys.verticalPosition)
+            }
+        }
+    }
 
     var indicatorVariants: [Color] {
         Color.indicatorVariants(fromHex: indicatorColorHex)
@@ -104,6 +115,8 @@ final class UsageStore: ObservableObject {
         let savedOpacity = UserDefaults.standard.object(forKey: Keys.glassOpacity) as? Double ?? 0.50
         glassOpacity = max(0.0, min(1.0, savedOpacity))
         indicatorColorHex = UserDefaults.standard.string(forKey: Keys.indicatorColorHex) ?? "#407CDE"
+        let savedVertical = UserDefaults.standard.object(forKey: Keys.verticalPosition) as? Double ?? 0.5
+        verticalPosition = max(0.0, min(1.0, savedVertical))
         if let forced = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_GLASS"] {
             glassEnabled = forced == "1"   // debug aid; not persisted
         }
@@ -330,6 +343,7 @@ final class UsageStore: ObservableObject {
         static let glassEnabled = "glassEnabled"
         static let glassOpacity = "glassOpacity"
         static let indicatorColorHex = "indicatorColorHex"
+        static let verticalPosition = "verticalPosition"
     }
 }
 
