@@ -123,3 +123,7 @@ GaugeZ/
 Issues and pull requests are welcome. If you are adding a provider, keep the adapter
 self-contained, decode defensively, and surface an explicit health state instead of a
 guessed number when the upstream format changes.
+
+## Thanks
+
+Design inspiration for the edge rail came from [@hivinz_](https://x.com/hivinz_). Thank you.
