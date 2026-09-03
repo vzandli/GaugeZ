@@ -153,19 +153,16 @@ struct RailDragHandle: View {
                     actions.dragEnded()
                 },
                 onHover: { inside in
-                    withAnimation(.easeOut(duration: 0.15)) {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
                         isHovered = inside
                     }
                 }
             )
 
-            // Visual pill indicator in the top shoulder
+            // Visual indicator in the top shoulder: '-' when idle, bold '^ - v' when hovered/dragging
             VStack(spacing: 0) {
-                Spacer().frame(height: 18)
-                Capsule()
-                    .fill(Color.white.opacity(isDragging ? 0.85 : (isHovered ? 0.52 : 0.22)))
-                    .frame(width: isDragging ? 26 : (isHovered ? 24 : 20), height: 3.5)
-                    .shadow(color: .black.opacity(isHovered ? 0.35 : 0), radius: 2, y: 1)
+                Spacer().frame(height: 15)
+                dragAffordance
             }
             .allowsHitTesting(false)
         }
@@ -173,6 +170,33 @@ struct RailDragHandle: View {
         .contentShape(Rectangle())
         .help("Drag vertically to reposition GaugeZ")
         .accessibilityLabel("Drag handle to reposition GaugeZ vertically")
+    }
+
+    private var dragAffordance: some View {
+        let active = isHovered || isDragging
+        return ZStack {
+            // Top chevron (slides up and expands on hover)
+            Image(systemName: "chevron.up")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(active ? (isDragging ? 1.0 : 0.90) : 0))
+                .offset(y: active ? (isDragging ? -13.5 : -11.5) : 0)
+                .scaleEffect(active ? 1.0 : 0.2)
+
+            // Center bar (-) expands wider and thicker on hover
+            Capsule()
+                .fill(Color.white.opacity(active ? (isDragging ? 1.0 : 0.85) : 0.24))
+                .frame(width: active ? 24 : 20, height: active ? 4 : 3.5)
+
+            // Bottom chevron (slides down and expands on hover)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(active ? (isDragging ? 1.0 : 0.90) : 0))
+                .offset(y: active ? (isDragging ? 13.5 : 11.5) : 0)
+                .scaleEffect(active ? 1.0 : 0.2)
+        }
+        .shadow(color: .black.opacity(active ? 0.45 : 0), radius: 3, y: 1)
+        .animation(.spring(response: 0.28, dampingFraction: 0.70), value: active)
+        .animation(.spring(response: 0.28, dampingFraction: 0.70), value: isDragging)
     }
 }
 
@@ -348,24 +372,47 @@ struct EdgeRailView: View {
 
     /// Round settings button below the body, brightening while hovered or while settings are open.
     private func gearZone(edge: EdgeSide) -> some View {
-        Button(action: actions.settingsToggle) {
-            Image(systemName: "gearshape")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.white.opacity(gearHighlighted ? 1 : 0.7))
-                .frame(width: RailMetrics.gearButtonSize, height: RailMetrics.gearButtonSize)
-                // No shadow: the rail body it sits under has none, and the rail clips at its edges.
-                .modifier(RailGlass.Surface(
-                    shape: Circle(),
-                    glassOpacity: store.glassOpacity,
-                    tint: RailGlass.railTint(opacity: store.glassOpacity),
-                    interactive: true,
-                    enabled: store.glassEnabled,
-                    shadowed: false
-                ))
-                .contentShape(Circle())
+        let isOpen = state.attachment == .settings
+        return Button(action: actions.settingsToggle) {
+            ZStack {
+                // Subtle glass specular ring when active/hovered
+                Circle()
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(gearHighlighted ? 0.38 : 0.12),
+                                Color.white.opacity(gearHighlighted ? 0.14 : 0.04)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
+                    .frame(width: RailMetrics.gearButtonSize, height: RailMetrics.gearButtonSize)
+
+                // Mechanical rotating gear icon
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.white.opacity(gearHighlighted ? 1.0 : 0.68))
+                    .rotationEffect(.degrees(isOpen ? 90 : (gearZoneHovered ? 45 : 0)))
+                    .scaleEffect(isOpen ? 1.15 : (gearZoneHovered ? 1.10 : 1.0))
+                    .shadow(color: .white.opacity(isOpen ? 0.35 : (gearZoneHovered ? 0.20 : 0)), radius: 4)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.68), value: gearZoneHovered)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.70), value: isOpen)
+            }
+            .frame(width: RailMetrics.gearButtonSize, height: RailMetrics.gearButtonSize)
+            // No shadow: the rail body it sits under has none, and the rail clips at its edges.
+            .modifier(RailGlass.Surface(
+                shape: Circle(),
+                glassOpacity: store.glassOpacity,
+                tint: RailGlass.railTint(opacity: store.glassOpacity),
+                interactive: true,
+                enabled: store.glassEnabled,
+                shadowed: false
+            ))
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .scaleEffect(gearHighlighted ? 1.06 : 1)
         .contextMenu {
             Button {
                 store.refresh()
@@ -383,7 +430,9 @@ struct EdgeRailView: View {
         .padding(.top, 3)
         .contentShape(Rectangle())
         .onHover { inside in
-            gearZoneHovered = inside
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.70)) {
+                gearZoneHovered = inside
+            }
             actions.gearZoneHover(inside)
         }
         .help("GaugeZ settings (Right-click for options)")
@@ -852,10 +901,11 @@ private struct AttachedSettingsView: View {
                 }
 
                 settingRow("Style") {
-                    Picker("Style", selection: $store.glassEnabled) {
-                        Text("Liquid Glass").tag(true)
-                        Text("Solid").tag(false)
-                    }
+                    StableStylePicker(
+                        isGlassEnabled: store.glassEnabled,
+                        onChange: { store.glassEnabled = $0 }
+                    )
+                    .equatable()
                 }
             }
 
@@ -958,6 +1008,57 @@ private struct AttachedSettingsView: View {
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Configure the native segmented control completely before its first layout. SwiftUI's Picker
+/// wrapper initially reports a narrower intrinsic width, then expands the first time any bound
+/// setting changes. It also redraws its selected segment during every opacity update.
+private struct StableStylePicker: NSViewRepresentable, Equatable {
+    let isGlassEnabled: Bool
+    let onChange: (Bool) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.isGlassEnabled == rhs.isGlassEnabled
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChange: onChange)
+    }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(
+            labels: ["Liquid Glass", "Solid"],
+            trackingMode: .selectOne,
+            target: context.coordinator,
+            action: #selector(Coordinator.selectionChanged(_:))
+        )
+        control.segmentDistribution = .fillEqually
+        control.controlSize = .small
+        control.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+        control.selectedSegment = isGlassEnabled ? 0 : 1
+        control.setAccessibilityLabel("Style")
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.onChange = onChange
+        let selectedSegment = isGlassEnabled ? 0 : 1
+        if control.selectedSegment != selectedSegment {
+            control.selectedSegment = selectedSegment
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var onChange: (Bool) -> Void
+
+        init(onChange: @escaping (Bool) -> Void) {
+            self.onChange = onChange
+        }
+
+        @objc func selectionChanged(_ sender: NSSegmentedControl) {
+            onChange(sender.selectedSegment == 0)
+        }
     }
 }
 
