@@ -1,0 +1,18 @@
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.xcresult
+*.xcarchive
+.swiftpm/
+
+# Release artifacts (see DISTRIBUTION.md)
+releases/
+
+# macOS
+.DS_Store
+
+# Internal working docs
+ROADMAP.md
+DISTRIBUTION.md
