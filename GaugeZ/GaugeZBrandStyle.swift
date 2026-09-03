@@ -2,11 +2,11 @@ import CoreText
 import SwiftUI
 
 enum GaugeZBrandTypography {
-    static let fontName = "ASTRA"
+    static let fontName = "ZYORK"
     static let zColor = Color(red: 23.0 / 255.0, green: 200.0 / 255.0, blue: 227.0 / 255.0)
 
     private static let registration: Void = {
-        guard let fontURL = Bundle.main.url(forResource: "zdivefnt", withExtension: "otf") else { return }
+        guard let fontURL = Bundle.main.url(forResource: "zyork", withExtension: "otf") else { return }
         CTFontManagerRegisterFontsForURL(fontURL as CFURL, .process, nil)
     }()
 

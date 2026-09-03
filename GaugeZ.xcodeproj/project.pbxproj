@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A100000130487F52007C200F /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A100000230487F52007C200F /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		654BE52F30487F52007C200F /* GaugeZ.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GaugeZ.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -19,10 +23,6 @@
 			target = 654BE52E30487F52007C200F /* GaugeZ */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
-/* Begin PBXBuildFile section */
-		A100000130487F52007C200F /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A100000230487F52007C200F /* Sparkle */; };
-/* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		654BE53130487F52007C200F /* GaugeZ */ = {
@@ -38,9 +38,11 @@
 /* Begin PBXFrameworksBuildPhase section */
 		654BE52C30487F52007C200F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
 			files = (
 				A100000130487F52007C200F /* Sparkle in Frameworks */,
 			);
+			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -73,6 +75,8 @@
 				654BE52D30487F52007C200F /* Resources */,
 			);
 			buildRules = (
+			);
+			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
 				654BE53130487F52007C200F /* GaugeZ */,
@@ -109,11 +113,11 @@
 			);
 			mainGroup = 654BE52630487F52007C200F;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
-			productRefGroup = 654BE53030487F52007C200F /* Products */;
 			packageReferences = (
 				A100000330487F52007C200F /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 654BE53030487F52007C200F /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -125,21 +129,25 @@
 /* Begin PBXResourcesBuildPhase section */
 		654BE52D30487F52007C200F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
 			files = (
 			);
+			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		654BE52B30487F52007C200F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
 			files = (
 			);
+			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		654BE53D30487F52007C200F /* Debug configuration for PBXProject "GaugeZ" */ = {
+		654BE53D30487F52007C200F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -203,7 +211,7 @@
 			};
 			name = Debug;
 		};
-		654BE53E30487F52007C200F /* Release configuration for PBXProject "GaugeZ" */ = {
+		654BE53E30487F52007C200F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -259,7 +267,7 @@
 			};
 			name = Release;
 		};
-		654BE54030487F52007C200F /* Debug configuration for PBXNativeTarget "GaugeZ" */ = {
+		654BE54030487F52007C200F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -291,7 +299,7 @@
 			};
 			name = Debug;
 		};
-		654BE54130487F52007C200F /* Release configuration for PBXNativeTarget "GaugeZ" */ = {
+		654BE54130487F52007C200F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -329,17 +337,19 @@
 		654BE52A30487F52007C200F /* Build configuration list for PBXProject "GaugeZ" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				654BE53D30487F52007C200F /* Debug configuration for PBXProject "GaugeZ" */,
-				654BE53E30487F52007C200F /* Release configuration for PBXProject "GaugeZ" */,
+				654BE53D30487F52007C200F /* Debug */,
+				654BE53E30487F52007C200F /* Release */,
 			);
+			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		654BE53F30487F52007C200F /* Build configuration list for PBXNativeTarget "GaugeZ" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				654BE54030487F52007C200F /* Debug configuration for PBXNativeTarget "GaugeZ" */,
-				654BE54130487F52007C200F /* Release configuration for PBXNativeTarget "GaugeZ" */,
+				654BE54030487F52007C200F /* Debug */,
+				654BE54130487F52007C200F /* Release */,
 			);
+			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
@@ -364,5 +374,4 @@
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 654BE52730487F52007C200F /* Project object */;
-	validationLevel = 1;
 }
