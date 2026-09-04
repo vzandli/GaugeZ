@@ -56,6 +56,19 @@ echo "==> Generating appcast"
   --full-release-notes-url "https://github.com/$REPO/releases/tag/$TAG" \
   "$OUT"
 
+# generate_appcast rewrites every enclosure with the new release's download prefix, but older
+# archives live on their own releases. Point each older item back at its own vX.Y.Z tag.
+echo "==> Restoring download URLs for previous versions"
+VERSION="$VERSION" TAG="$TAG" perl -0pi -e '
+  s{<item>.*?</item>}{
+    my $item = $&;
+    if ($item =~ m{<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>} && $1 ne $ENV{VERSION}) {
+      my $own = "v$1";
+      $item =~ s{/releases/download/\Q$ENV{TAG}\E/}{/releases/download/$own/}g;
+    }
+    $item
+  }gse' "$OUT/appcast.xml"
+
 echo "==> Creating GitHub release $TAG"
 ASSETS=("$OUT/$ARCHIVE" "$OUT/appcast.xml" "$OUT"/*.delta(N))
 NOTES_ARGS=(--generate-notes)
