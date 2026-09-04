@@ -24,7 +24,8 @@ ARCHIVE="GaugeZ-$VERSION.zip"
 
 echo "==> Verifying $APP ($VERSION, build $BUILD)"
 codesign --verify --deep --strict "$APP"
-codesign -dv "$APP" 2>&1 | grep -q 'Authority=Developer ID Application' || { echo "App is not signed with Developer ID."; exit 1; }
+SIGNING_INFO="$(codesign -dvv "$APP" 2>&1)"
+[[ "$SIGNING_INFO" == *'Authority=Developer ID Application'* ]] || { echo "App is not signed with Developer ID."; exit 1; }
 xcrun stapler validate "$APP" >/dev/null || { echo "App is not stapled. Notarize and run: xcrun stapler staple \"$APP\""; exit 1; }
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   echo "Release $TAG already exists on $REPO."; exit 1
