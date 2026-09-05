@@ -40,7 +40,10 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .claude: URL(fileURLWithPath: "/Applications/Claude.app")
         case .cursor: URL(fileURLWithPath: "/Applications/Cursor.app")
-        case .codex: URL(fileURLWithPath: "/Applications/ChatGPT.app")
+        case .codex:
+            FileManager.default.fileExists(atPath: "/Applications/Codex.app")
+                ? URL(fileURLWithPath: "/Applications/Codex.app")
+                : URL(fileURLWithPath: "/Applications/ChatGPT.app")
         case .antigravity:
             FileManager.default.fileExists(atPath: "/Applications/Antigravity.app")
                 ? URL(fileURLWithPath: "/Applications/Antigravity.app")
@@ -53,7 +56,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .claude: "Reads the usage log the Claude desktop app keeps, or the Claude Code CLI sign-in from Keychain."
         case .cursor: "Uses Cursor's local sign-in to ask cursor.com for plan usage."
-        case .codex: "Talks to the Codex app-server bundled with ChatGPT."
+        case .codex: "Talks to the local app-server bundled with Codex or ChatGPT."
         case .antigravity: "Asks the language server of a running Antigravity app or IDE for its model quotas."
         }
     }
@@ -115,9 +118,16 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
     let source: String
     let health: ProviderHealth
 
-    var remainingPercent: Int? {
-        windows.map(\.remainingPercent).min()
+    var headlineWindowID: String? = nil
+
+    var headlineWindow: UsageWindow? {
+        if let headlineWindowID {
+            return windows.first { $0.id == headlineWindowID }
+        }
+        return windows.min { $0.remainingPercent < $1.remainingPercent }
     }
+
+    var remainingPercent: Int? { headlineWindow?.remainingPercent }
 
     static func placeholder(
         for provider: ProviderID,
@@ -143,7 +153,8 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
             windows: windows,
             observedAt: observedAt,
             source: source,
-            health: health
+            health: health,
+            headlineWindowID: headlineWindowID
         )
     }
 }
@@ -203,7 +214,10 @@ enum DisplayMode: String, CaseIterable, Identifiable, Sendable {
 enum EdgeSide: String, CaseIterable, Identifiable, Sendable {
     case right
     case left
+    case top
+    case bottom
 
+    var isHorizontal: Bool { self == .top || self == .bottom }
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
 }

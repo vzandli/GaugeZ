@@ -28,13 +28,15 @@ private enum SettingsPalette {
     static let secondary = Color.white.opacity(0.56)
     static let tertiary = Color.white.opacity(0.34)
     static let accent = Color(red: 0.27, green: 0.58, blue: 1.00)
+    /// Native `.switch` toggles are avoided here; see `RailToggleStyle`.
+    static let toggle = RailToggleStyle(glass: false, onColor: accent, width: 38, height: 22)
 }
 
 /// GaugeZ's standalone settings workspace.
 struct SettingsView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var updateManager: UpdateManager
-    @State private var destination: SettingsDestination = .providers
+    @State private var destination = SettingsDestination(rawValue: ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_SETTINGS"] ?? "") ?? .providers
 
     var body: some View {
         HStack(spacing: 0) {
@@ -95,7 +97,7 @@ private struct UpdatesSettingsPage: View {
                 ) {
                     Toggle("", isOn: $updateManager.automaticallyChecksForUpdates)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(SettingsPalette.toggle)
                 }
 
                 SettingsRowDivider()
@@ -228,6 +230,7 @@ private struct SettingsSidebar: View {
 
 private struct ProvidersSettingsPage: View {
     @ObservedObject var store: UsageStore
+    @AppStorage("hasSeenIntroduction") private var hasSeenIntroduction = false
 
     private var liveCount: Int {
         store.visibleProviders.filter { store.snapshot(for: $0).health == .live }.count
@@ -247,6 +250,20 @@ private struct ProvidersSettingsPage: View {
                 .controlSize(.regular)
             }
 
+            if !hasSeenIntroduction {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Welcome to GaugeZ").font(.headline)
+                    Text("Hover the screen-edge tab to see quota remaining. Select a provider for its windows and reset times. The rail shows your most constrained window unless you choose another.")
+                    Text("GaugeZ uses the sign-in from each enabled provider. Disable any you do not want it to read. Activity monitoring is optional and stays on this Mac.")
+                        .foregroundStyle(SettingsPalette.secondary)
+                    Text("For keyboard access, choose Usage… in the GaugeZ menu bar menu.")
+                    Button("Got it") { hasSeenIntroduction = true }.buttonStyle(.borderedProminent)
+                }
+                .font(.callout)
+                .padding(16)
+                .settingsCard()
+            }
+
             HStack(spacing: 8) {
                 SummaryPill(
                     text: "\(store.enabledProviders.count) enabled",
@@ -261,7 +278,8 @@ private struct ProvidersSettingsPage: View {
             }
 
             VStack(spacing: 10) {
-                ForEach(ProviderID.allCases) { provider in
+                ForEach(store.providerOrder) { provider in
+                    VStack(alignment: .trailing, spacing: 4) {
                     ProviderSettingsRow(
                         provider: provider,
                         snapshot: store.snapshot(for: provider),
@@ -272,6 +290,16 @@ private struct ProvidersSettingsPage: View {
                         claudeSource: $store.claudeSource,
                         openProvider: { store.open(provider) }
                     )
+                    HStack(spacing: 8) {
+                        Button { store.moveProvider(provider, by: -1) } label: { Label("Up", systemImage: "arrow.up") }
+                            .disabled(store.providerOrder.first == provider)
+                            .accessibilityLabel("Move \(provider.displayName) up in the rail")
+                        Button { store.moveProvider(provider, by: 1) } label: { Label("Down", systemImage: "arrow.down") }
+                            .disabled(store.providerOrder.last == provider)
+                            .accessibilityLabel("Move \(provider.displayName) down in the rail")
+                    }
+                    .font(.caption).buttonStyle(.borderless)
+                    }
                 }
             }
 
@@ -358,7 +386,7 @@ private struct ProviderSettingsRow: View {
 
             Toggle("Enable \(provider.displayName)", isOn: $enabled)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(SettingsPalette.toggle)
                 .controlSize(.small)
             }
         .padding(.horizontal, 14)
@@ -401,6 +429,28 @@ private struct AppearanceSettingsPage: View {
             )
 
             VStack(spacing: 0) {
+                    SettingsControlRow(title: "Launch at login", subtitle: "Keep GaugeZ available after signing in") {
+                        Toggle("Launch at login", isOn: Binding(get: { store.launchAtLogin }, set: { store.setLaunchAtLogin($0) }))
+                            .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                    }
+                    if let problem = store.loginProblem {
+                        Text(problem).font(.caption).foregroundStyle(.orange).padding(12)
+                    }
+                    SettingsRowDivider()
+                    SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code session states from local metadata") {
+                        Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
+                    }
+                    SettingsRowDivider()
+                    SettingsControlRow(title: "Display", subtitle: "Returns to this display when it reconnects") {
+                        Picker("Display", selection: $store.selectedDisplayID) {
+                            ForEach(store.availableDisplays) { display in Text(display.name).tag(display.id) }
+                            if !store.availableDisplays.contains(where: { $0.id == store.selectedDisplayID }) {
+                                Text("Saved display (disconnected)").tag(store.selectedDisplayID)
+                            }
+                        }
+                        .labelsHidden().frame(width: 170)
+                    }
+                    SettingsRowDivider()
                     SettingsControlRow(
                         title: "Rail visibility",
                         subtitle: "When the edge rail appears"
@@ -418,7 +468,7 @@ private struct AppearanceSettingsPage: View {
 
                     SettingsControlRow(
                         title: "Screen edge",
-                        subtitle: "Anchor GaugeZ to either side"
+                        subtitle: "Anchor GaugeZ to any screen edge"
                     ) {
                         Picker("Screen edge", selection: $store.edgeSide) {
                             ForEach(EdgeSide.allCases) { edge in
@@ -427,13 +477,14 @@ private struct AppearanceSettingsPage: View {
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
-                        .frame(width: 142)
+                        // Sized to its four segments; a fixed width sized for two overflowed the row.
+                        .fixedSize()
                     }
 
                     SettingsRowDivider()
 
                     SettingsControlRow(
-                        title: "Vertical position",
+                        title: store.edgeSide.isHorizontal ? "Horizontal position" : "Vertical position",
                         subtitle: "Position along the screen edge"
                     ) {
                         HStack(spacing: 8) {
@@ -602,6 +653,7 @@ private struct DiagnosticsSettingsPage: View {
 }
 
 private struct DiagnosticsCard: View {
+    @EnvironmentObject private var store: UsageStore
     let snapshot: UsageSnapshot
 
     var body: some View {
@@ -619,6 +671,12 @@ private struct DiagnosticsCard: View {
 
             VStack(spacing: 9) {
                 DiagnosticValue(label: "Source", value: snapshot.source)
+                if let retry = store.nextRetry(for: snapshot.provider) {
+                    DiagnosticValue(label: "Next retry", value: retry.formatted(date: .omitted, time: .standard))
+                }
+                if let window = snapshot.headlineWindow {
+                    DiagnosticValue(label: "Rail window", value: window.label)
+                }
                 if let plan = snapshot.planName {
                     DiagnosticValue(label: "Plan", value: plan)
                 }
@@ -628,6 +686,9 @@ private struct DiagnosticsCard: View {
                 )
             }
 
+            if let error = store.actionErrors[snapshot.provider] {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
             if let message = snapshot.health.message {
                 Text(message)
                     .font(.system(size: 10.5))
@@ -635,6 +696,17 @@ private struct DiagnosticsCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 1)
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Button("Retry") { store.refresh(snapshot.provider) }
+                    .disabled(!store.enabledProviders.contains(snapshot.provider) || store.refreshing.contains(snapshot.provider) || store.nextRetry(for: snapshot.provider) != nil)
+                Button("Open app") { store.open(snapshot.provider) }
+                Spacer()
+                Button("Forget reading") { store.forget(snapshot.provider) }
+                    .help("Clears GaugeZ’s cached reading. The enabled provider can refresh again later.")
+            }
+            .font(.caption).buttonStyle(.borderless)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -811,11 +883,16 @@ private struct HealthBadge: View {
 
 private extension View {
     func settingsCard() -> some View {
-        background(SettingsPalette.card, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .strokeBorder(SettingsPalette.cardStroke, lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        // The shadow sits on the background shape, not on the whole card: shadowing the card
+        // rasterizes all of its content offscreen (~40 MB per card at Retina scale).
+        background {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(SettingsPalette.card)
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(SettingsPalette.cardStroke, lineWidth: 1)
+        }
     }
 }

@@ -16,7 +16,7 @@ final class UpdateManager: ObservableObject {
 
     init() {
         let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: ProcessInfo.processInfo.environment["GAUGEZ_PREVIEW_DATA"] != "1",
             updaterDelegate: nil,
             userDriverDelegate: nil
         )

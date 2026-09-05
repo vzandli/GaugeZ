@@ -18,8 +18,7 @@ actor ClaudeUsageProvider: UsageProviding {
 
     private let session: URLSession
     private let selectedSource: @Sendable () -> ClaudeSource
-    private var retryNotBefore: Date?
-    private var cachedIdentity: ClaudeIdentity?
+    private let retryPolicy = ProviderRetryPolicy(provider: .claude)
 
     init(selectedSource: @escaping @Sendable () -> ClaudeSource) {
         self.selectedSource = selectedSource
@@ -31,16 +30,19 @@ actor ClaudeUsageProvider: UsageProviding {
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        switch selectedSource() {
+        let source = selectedSource()
+        switch source {
         case .claudeCode:
             return try await fetchViaClaudeCode()
         case .desktop:
+            // Claude Desktop keeps its own usage log current, so a fresh log is the primary
+            // reading; the rate-limited API is only asked when the log has gone stale.
+            let local = try? ClaudeDesktopUsageReader.latestSnapshot()
+            if let local, local.health == .live { return local }
             do {
                 return try await fetchViaClaudeDesktop()
             } catch {
-                if let desktop = try? ClaudeDesktopUsageReader.latestSnapshot() {
-                    return desktop
-                }
+                if let local { return local }
                 throw error
             }
         }
@@ -57,13 +59,11 @@ actor ClaudeUsageProvider: UsageProviding {
     }
 
     private func fetchViaCredential(_ credential: ClaudeCredential) async throws -> UsageSnapshot {
-        if let retryNotBefore, retryNotBefore > .now {
-            throw ClaudeProviderError.rateLimited(until: retryNotBefore)
-        }
-
         if let expiresAt = credential.expiresAt, expiresAt.addingTimeInterval(60) < .now {
             throw ClaudeProviderError.tokenExpired
         }
+        // Checked here, not in fetchSnapshot, so the desktop local-log fallback still runs during backoff.
+        try retryPolicy.check()
 
         let usage = try await requestUsage(token: credential.accessToken)
         let identity = await resolveIdentity(token: credential.accessToken)
@@ -104,16 +104,14 @@ actor ClaudeUsageProvider: UsageProviding {
 
         switch http.statusCode {
         case 200:
-            retryNotBefore = nil
+            retryPolicy.succeeded()
             return data
         case 401:
             throw ClaudeProviderError.unauthorized
         case 403:
             throw ClaudeProviderError.forbidden
         case 429:
-            let until = Self.retryAfterDate(from: http) ?? Date().addingTimeInterval(120)
-            retryNotBefore = until
-            throw ClaudeProviderError.rateLimited(until: until)
+            throw retryPolicy.throttled(response: http)
         case 500...599:
             throw ClaudeProviderError.server(http.statusCode)
         default:
@@ -121,15 +119,19 @@ actor ClaudeUsageProvider: UsageProviding {
         }
     }
 
-    /// Identity comes from Claude Code's own non-secret config first, then the OAuth profile
-    /// endpoint. Either way the value is only displayed, never stored by GaugeZ.
+    /// Resolve identity from the credential used for this request; local CLI metadata may
+    /// describe a different account from the selected desktop source. Memoized per token so
+    /// the profile endpoint is hit once per credential, not once per refresh.
     private func resolveIdentity(token: String) async -> ClaudeIdentity? {
-        if let cachedIdentity { return cachedIdentity }
-        if let local = ClaudeCredentialReader.localIdentity() {
-            cachedIdentity = local
-            return local
-        }
+        if let cached = cachedIdentity, cached.token == token { return cached.identity }
+        let identity = await requestIdentity(token: token)
+        if let identity { cachedIdentity = (token, identity) }
+        return identity
+    }
 
+    private var cachedIdentity: (token: String, identity: ClaudeIdentity)?
+
+    private func requestIdentity(token: String) async -> ClaudeIdentity? {
         var request = URLRequest(url: Self.profileURL)
         applyHeaders(to: &request, token: token)
         guard
@@ -145,7 +147,6 @@ actor ClaudeUsageProvider: UsageProviding {
             organizationName: organization?["name"] as? String,
             rateLimitTier: organization?["rate_limit_tier"] as? String
         )
-        cachedIdentity = identity
         return identity
     }
 
@@ -155,20 +156,6 @@ actor ClaudeUsageProvider: UsageProviding {
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("GaugeZ/\(version)", forHTTPHeaderField: "User-Agent")
-    }
-
-    private static func retryAfterDate(from response: HTTPURLResponse) -> Date? {
-        guard let value = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespaces) else {
-            return nil
-        }
-        if let seconds = TimeInterval(value) {
-            return Date().addingTimeInterval(max(1, seconds))
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return formatter.date(from: value)
     }
 
     private func planName(credential: ClaudeCredential, identity: ClaudeIdentity?) -> String? {
@@ -221,21 +208,6 @@ enum ClaudeCredentialReader {
             throw ClaudeProviderError.keychainDenied(status)
         }
         throw ClaudeProviderError.notSignedIn
-    }
-
-    /// Non-secret account metadata Claude Code keeps next to its settings.
-    static func localIdentity() -> ClaudeIdentity? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
-        guard
-            let data = try? Data(contentsOf: url),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let account = object["oauthAccount"] as? [String: Any]
-        else { return nil }
-
-        let email = account["emailAddress"] as? String
-        let organization = account["organizationName"] as? String
-        guard email != nil || organization != nil else { return nil }
-        return ClaudeIdentity(email: email, organizationName: organization, rateLimitTier: nil)
     }
 
     private static func candidateKeychainServices() -> [String] {

@@ -14,6 +14,7 @@ actor CursorUsageProvider: UsageProviding {
     private static let legacyUsageURL = URL(string: "https://cursor.com/api/usage")!
 
     private let session: URLSession
+    private let retryPolicy = ProviderRetryPolicy(provider: .cursor)
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -26,6 +27,13 @@ actor CursorUsageProvider: UsageProviding {
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
+        try retryPolicy.check()
+        let snapshot = try await fetchUsage()
+        retryPolicy.succeeded()
+        return snapshot
+    }
+
+    private func fetchUsage() async throws -> UsageSnapshot {
         let cursorSession = try CursorLocalSession.load()
         if let expiresAt = cursorSession.expiresAt, expiresAt < .now {
             throw CursorProviderError.sessionExpired
@@ -75,7 +83,7 @@ actor CursorUsageProvider: UsageProviding {
         switch http.statusCode {
         case 200: return data
         case 401, 403: throw CursorProviderError.unauthorized
-        case 429: throw CursorProviderError.rateLimited
+        case 429: throw retryPolicy.throttled(response: http)
         case 500...599: throw CursorProviderError.server(http.statusCode)
         default: throw CursorProviderError.unexpectedStatus(http.statusCode)
         }

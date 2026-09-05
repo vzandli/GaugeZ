@@ -3,9 +3,13 @@ import Foundation
 actor CodexUsageProvider: UsageProviding {
     func fetchSnapshot() async throws -> UsageSnapshot {
         let probe = CodexAppServerProbe()
-        return try await Task.detached(priority: .utility) {
-            try probe.run()
-        }.value
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .utility) {
+                try probe.run()
+            }.value
+        } onCancel: {
+            probe.cancel()
+        }
     }
 }
 
@@ -21,6 +25,8 @@ private final class CodexAppServerProbe: @unchecked Sendable {
     private var completed = false
     private var result: Result<UsageSnapshot, Error>?
     private var stderr = Data()
+
+    func cancel() { finish(.failure(CancellationError())) }
 
     func run() throws -> UsageSnapshot {
         let executable = try locateExecutable()
@@ -70,8 +76,8 @@ private final class CodexAppServerProbe: @unchecked Sendable {
 
     private func locateExecutable() throws -> URL {
         let candidates = [
-            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
-            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex")
+            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
         ]
         if let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {
             return executable
@@ -135,8 +141,10 @@ private final class CodexAppServerProbe: @unchecked Sendable {
         let buckets: [(String, RateLimitSnapshot)]
         if let byID = response.rateLimitsByLimitId, !byID.isEmpty {
             buckets = byID.sorted(by: { $0.key < $1.key })
+        } else if let legacy = response.rateLimits {
+            buckets = [(legacy.limitId ?? "codex", legacy)]
         } else {
-            buckets = [(response.rateLimits.limitId ?? "codex", response.rateLimits)]
+            throw CodexProviderError.noUsageWindows
         }
 
         var windows: [UsageWindow] = []
@@ -144,10 +152,10 @@ private final class CodexAppServerProbe: @unchecked Sendable {
         for (bucketID, bucket) in buckets {
             planName = planName ?? bucket.planType
             if let primary = bucket.primary {
-                windows.append(primary.normalized(id: "\(bucketID)-primary", suffix: nil))
+                windows.append(try primary.normalized(id: "\(bucketID)-primary", fallbackLabel: "Current limit"))
             }
             if let secondary = bucket.secondary {
-                windows.append(secondary.normalized(id: "\(bucketID)-secondary", suffix: "Weekly"))
+                windows.append(try secondary.normalized(id: "\(bucketID)-secondary", fallbackLabel: "Weekly limit"))
             }
         }
 
@@ -173,7 +181,7 @@ private final class CodexAppServerProbe: @unchecked Sendable {
     private func receiveError(_ data: Data) {
         guard !data.isEmpty else { return }
         lock.lock()
-        stderr.append(data)
+        if stderr.count < 8192 { stderr.append(data.prefix(8192 - stderr.count)) }
         lock.unlock()
     }
 
@@ -214,7 +222,7 @@ private struct RateLimitEnvelope: Decodable {
 
 private struct RateLimitResponse: Decodable {
     let accountId: String?
-    let rateLimits: RateLimitSnapshot
+    let rateLimits: RateLimitSnapshot?
     let rateLimitsByLimitId: [String: RateLimitSnapshot]?
 }
 
@@ -230,8 +238,13 @@ private struct RateLimitWindow: Decodable {
     let resetsAt: Int64?
     let windowDurationMins: Int?
 
-    func normalized(id: String, suffix: String?) -> UsageWindow {
-        let label = suffix ?? durationLabel
+    /// `fallbackLabel` names the window when the server omits its duration; out-of-range
+    /// percentages are clamped rather than rejected so one odd bucket cannot fail the snapshot.
+    func normalized(id: String, fallbackLabel: String) throws -> UsageWindow {
+        guard windowDurationMins.map({ $0 > 0 }) ?? true else {
+            throw CodexProviderError.malformedResponse
+        }
+        let label = windowDurationMins == nil ? fallbackLabel : durationLabel
         return UsageWindow(
             id: id,
             label: label,
@@ -279,7 +292,7 @@ private enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
             } else if message.contains("401") || message.contains("token") || message.contains("auth") {
                 return "ChatGPT session expired. Sign in inside ChatGPT to refresh."
             }
-            return message
+            return "Codex app-server could not provide usage. Open Codex and retry."
         }
     }
 

@@ -3,9 +3,12 @@ import Combine
 import Foundation
 import os
 import SwiftUI
+import ServiceManagement
+import Network
 
 @MainActor
 final class UsageStore: ObservableObject {
+    let isPreview = ProcessInfo.processInfo.environment["GAUGEZ_PREVIEW_DATA"] == "1"
     @Published private(set) var snapshots: [ProviderID: UsageSnapshot]
     @Published var enabledProviders: Set<ProviderID> {
         didSet { persistEnabledProviders() }
@@ -29,9 +32,8 @@ final class UsageStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(claudeSource.rawValue, forKey: Keys.claudeSource)
             if oldValue != claudeSource {
-                DispatchQueue.main.async { [weak self] in
-                    self?.refresh(.claude)
-                }
+                invalidate(.claude)
+                refresh(.claude)
             }
         }
     }
@@ -49,6 +51,100 @@ final class UsageStore: ObservableObject {
                 UserDefaults.standard.set(clamped, forKey: Keys.verticalPosition)
             }
         }
+    }
+
+    @Published var selectedDisplayID: String = UserDefaults.standard.string(forKey: "selectedDisplayID") ?? "main" {
+        didSet { UserDefaults.standard.set(selectedDisplayID, forKey: "selectedDisplayID") }
+    }
+    @Published var providerOrder: [ProviderID] = {
+        let saved = (UserDefaults.standard.stringArray(forKey: "providerOrder") ?? []).compactMap(ProviderID.init(rawValue:))
+        return ProviderID.allCases.sorted { (saved.firstIndex(of: $0) ?? 99) < (saved.firstIndex(of: $1) ?? 99) }
+    }() {
+        didSet { UserDefaults.standard.set(providerOrder.map(\.rawValue), forKey: "providerOrder") }
+    }
+    @Published var headlineWindows: [String: String] = UserDefaults.standard.dictionary(forKey: "headlineWindows") as? [String: String] ?? [:] {
+        didSet { UserDefaults.standard.set(headlineWindows, forKey: "headlineWindows") }
+    }
+    @Published var activityEnabled = UserDefaults.standard.object(forKey: "activityEnabled") as? Bool ?? false {
+        didSet {
+            UserDefaults.standard.set(activityEnabled, forKey: "activityEnabled")
+            configureActivity()
+        }
+    }
+    @Published private(set) var sessions: [ActivitySession] = []
+    @Published private(set) var refreshing: Set<ProviderID> = []
+    @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published private(set) var loginProblem: String?
+    @Published private(set) var actionErrors: [ProviderID: String] = [:]
+    @Published private(set) var availableDisplays: [DisplayChoice] = DisplayChoice.current()
+    @Published private(set) var clock = Date()
+    var railIsExpanded = false
+    private var activityTask: Task<Void, Never>?
+    private let activityReader = ActivityReader()
+    private let networkMonitor = NWPathMonitor()
+    private var nextAutomaticRefresh: [ProviderID: Date] = [:]
+    private var lastRefreshSucceeded: [ProviderID: Date] = [:]
+    private var refreshGenerations: [ProviderID: UUID] = [:]
+    private var delayedRefreshes: [ProviderID: Task<Void, Never>] = [:]
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            loginProblem = SMAppService.mainApp.status == .requiresApproval
+                ? "Allow GaugeZ in System Settings → General → Login Items." : nil
+        } catch {
+            loginProblem = "macOS could not update the login item. Move GaugeZ to Applications and try again."
+        }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    func updateSystemSettings() {
+        availableDisplays = DisplayChoice.current()
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    func moveProvider(_ provider: ProviderID, by offset: Int) {
+        guard let index = providerOrder.firstIndex(of: provider), providerOrder.indices.contains(index + offset) else { return }
+        providerOrder.swapAt(index, index + offset)
+    }
+
+    func nextRetry(for provider: ProviderID) -> Date? { ProviderRetryPolicy(provider: provider).deadline }
+
+    func activity(for provider: ProviderID) -> [ActivitySession] {
+        activityEnabled && enabledProviders.contains(provider) ? sessions.filter { $0.provider == provider } : []
+    }
+
+    private func configureActivity() {
+        activityTask?.cancel()
+        sessions = []
+        guard !isPreview, activityEnabled, enabledProviders.contains(.claude) else { return }
+        activityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let reader = self?.activityReader else { return }
+                let found = await reader.readClaudeSessions()
+                guard !Task.isCancelled else { return }
+                if self?.sessions != found { self?.sessions = found }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    func forget(_ provider: ProviderID) {
+        invalidate(provider)
+    }
+
+    private func invalidate(_ provider: ProviderID) {
+        refreshTasks[provider]?.cancel()
+        refreshTasks[provider] = nil
+        delayedRefreshes[provider]?.cancel()
+        delayedRefreshes[provider] = nil
+        refreshGenerations[provider] = nil
+        refreshing.remove(provider)
+        ProviderRetryPolicy(provider: provider).reset()
+        snapshots[provider] = .placeholder(for: provider)
+        actionErrors[provider] = nil
+        SnapshotCache.save(Array(snapshots.values))
     }
 
     var indicatorVariants: [Color] {
@@ -74,11 +170,11 @@ final class UsageStore: ObservableObject {
         "com.anthropic.claudefordesktop": .claude,
         "com.todesktop.230313mzl4w4u92": .cursor,
         "com.openai.chat": .codex,
+        "com.openai.codex": .codex,
         "com.google.antigravity": .antigravity,
         "com.google.antigravity-ide": .antigravity
     ]
 
-    private static let periodicInterval: Duration = .seconds(300)
     /// Error descriptions never contain tokens, account IDs, or response bodies.
     private static let log = Logger(subsystem: "com.vzyork.GaugeZ", category: "usage")
     /// Optional plain-text mirror of the log lines, enabled by GAUGEZ_DEBUG_LOG=<file path>.
@@ -124,18 +220,48 @@ final class UsageStore: ObservableObject {
             edgeSide = side   // debug aid; not persisted because observers do not fire in init
         }
 
+        if isPreview {
+            enabledProviders = Set(ProviderID.allCases)
+            providerOrder = ProviderID.allCases
+            headlineWindows = [:]
+            displayMode = .hover
+            activityEnabled = true
+            sessions = [ActivitySession(id: "preview", provider: .claude, name: "GaugeZ", project: "GaugeZ",
+                                        state: .waiting, waitingReason: "Review the proposed changes")]
+            snapshots = Dictionary(uniqueKeysWithValues: ProviderID.allCases.enumerated().map { index, provider in
+                (provider, UsageSnapshot(provider: provider, accountID: nil, planName: "Preview plan",
+                    windows: [
+                        UsageWindow(id: "session", label: "5-hour limit", usedPercent: index == 2 ? 100 : 20 + index * 15,
+                                    resetsAt: Date().addingTimeInterval(3600), durationMinutes: 300),
+                        UsageWindow(id: "weekly", label: "Weekly limit", usedPercent: 35,
+                                    resetsAt: Date().addingTimeInterval(172800), durationMinutes: 10080)
+                    ], observedAt: .now, source: "Preview data", health: .live))
+            })
+            return
+        }
+
         // Last known values from the previous run, shown as stale until a refresh succeeds.
-        for cached in SnapshotCache.load() {
+        for cached in SnapshotCache.load() where enabledProviders.contains(cached.provider) {
             snapshots[cached.provider] = cached
         }
+        SnapshotCache.save(Array(snapshots.values))
 
         startPeriodicRefresh()
         observeWake()
         observeApplications()
+        configureActivity()
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "GaugeZ.network"))
     }
 
     deinit {
         periodicTask?.cancel()
+        activityTask?.cancel()
+        networkMonitor.cancel()
+        for task in delayedRefreshes.values { task.cancel() }
         for task in refreshTasks.values {
             task.cancel()
         }
@@ -148,7 +274,7 @@ final class UsageStore: ObservableObject {
     }
 
     var visibleProviders: [ProviderID] {
-        ProviderID.allCases.filter(enabledProviders.contains)
+        providerOrder.filter(enabledProviders.contains)
     }
 
     /// Providers that have a working adapter behind them.
@@ -157,7 +283,9 @@ final class UsageStore: ObservableObject {
     }
 
     func snapshot(for provider: ProviderID) -> UsageSnapshot {
-        snapshots[provider] ?? .placeholder(for: provider)
+        var value = snapshots[provider] ?? .placeholder(for: provider)
+        value.headlineWindowID = headlineWindows[provider.rawValue]
+        return value
     }
 
     func setProvider(_ provider: ProviderID, enabled: Bool) {
@@ -168,14 +296,9 @@ final class UsageStore: ObservableObject {
             }
         } else {
             enabledProviders.remove(provider)
-            refreshTasks[provider]?.cancel()
-            refreshTasks[provider] = nil
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.snapshots[provider] = .placeholder(for: provider)
-                SnapshotCache.save(Array(self.snapshots.values))
-            }
+            invalidate(provider)
         }
+        configureActivity()
     }
 
     /// The other Claude source, offered when the selected one cannot produce a value.
@@ -196,46 +319,69 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(_ provider: ProviderID) {
-        guard let adapter = providers[provider], enabledProviders.contains(provider) else { return }
-
+        guard !isPreview, let adapter = providers[provider], enabledProviders.contains(provider), refreshTasks[provider] == nil else { return }
+        // A backoff deadline only matters when a network fetch is the sole source of data:
+        // the provider itself declines the request, and a source with a local fallback
+        // (e.g. the Claude Desktop usage log) can still return a reading.
+        let generation = UUID()
+        refreshGenerations[provider] = generation
         lastRefreshStarted[provider] = .now
-        refreshTasks[provider]?.cancel()
+        nextAutomaticRefresh[provider] = Date().addingTimeInterval(60 + Double.random(in: 0...10))
+        refreshing.insert(provider)
         refreshTasks[provider] = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.refreshGenerations[provider] == generation {
+                    self.refreshTasks[provider] = nil
+                    self.refreshing.remove(provider)
+                }
+            }
             await self.refresh(provider, using: adapter)
         }
     }
 
-    /// Refreshes after a delay, for apps whose local servers take a moment to come up.
     private func refresh(_ provider: ProviderID, after delay: Duration) {
-        Task { [weak self] in
+        delayedRefreshes[provider]?.cancel()
+        delayedRefreshes[provider] = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.refresh(provider)
         }
     }
 
+    /// The Claude usage endpoint rate-limits polling faster than every few minutes, so Claude
+    /// never inherits the 60 s "active" cadence the local providers can afford.
+    private static let minimumPollInterval: [ProviderID: TimeInterval] = [.claude: 300]
+
     private func refreshIfIdle(_ provider: ProviderID, for interval: TimeInterval) {
         let last = lastRefreshStarted[provider] ?? .distantPast
-        guard Date().timeIntervalSince(last) >= interval else { return }
+        let floor = Self.minimumPollInterval[provider] ?? 0
+        guard Date().timeIntervalSince(last) >= max(interval, floor) else { return }
         refresh(provider)
     }
 
     func open(_ provider: ProviderID) {
         guard let url = provider.applicationURL else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: .init())
+        actionErrors[provider] = nil
+        NSWorkspace.shared.openApplication(at: url, configuration: .init()) { [weak self] _, error in
+            guard error != nil else { return }
+            Task { @MainActor [weak self] in
+                self?.actionErrors[provider] = "The provider app could not be opened. Install it in Applications and try again."
+            }
+        }
     }
 
     private func refresh(_ provider: ProviderID, using adapter: any UsageProviding) async {
         let previous = snapshot(for: provider)
         snapshots[provider] = previous.windows.isEmpty
             ? .placeholder(for: provider, health: .loading)
-            : previous.withHealth(.loading)
+            : previous
 
         do {
             let snapshot = try await adapter.fetchSnapshot()
             guard !Task.isCancelled else { return }
             Self.note("\(provider.displayName) refreshed: \(snapshot.health.shortLabel), \(snapshot.windows.count) windows via \(snapshot.source)")
+            lastRefreshSucceeded[provider] = .now
             snapshots[provider] = snapshot
             SnapshotCache.save(Array(snapshots.values))
         } catch is CancellationError {
@@ -244,6 +390,7 @@ final class UsageStore: ObservableObject {
             guard !Task.isCancelled else { return }
             Self.note("\(provider.displayName) refresh failed: \(error.localizedDescription)")
             snapshots[provider] = Self.failedSnapshot(for: provider, previous: previous, error: error)
+            SnapshotCache.save(Array(snapshots.values))
         }
     }
 
@@ -255,6 +402,12 @@ final class UsageStore: ObservableObject {
         previous: UsageSnapshot,
         error: Error
     ) -> UsageSnapshot {
+        // A rate-limit backoff is not news about the reading itself: keep the last good values
+        // untouched (the periodic tick ages them normally) and only surface the notice when
+        // there is nothing else to show.
+        if error is ProviderRetryError, !previous.windows.isEmpty {
+            return previous
+        }
         let health: ProviderHealth
         if let described = error as? ProviderHealthDescribing {
             health = described.providerHealth
@@ -281,9 +434,34 @@ final class UsageStore: ObservableObject {
     private func startPeriodicRefresh() {
         periodicTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: Self.periodicInterval)
+                try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { return }
-                self?.refresh()
+                self?.automaticRefreshTick()
+            }
+        }
+    }
+
+    private func automaticRefreshTick() {
+        clock = .now
+        for provider in visibleProviders {
+            let previous = snapshot(for: provider)
+            let crossedReset = previous.windows.contains { window in
+                guard let reset = window.resetsAt else { return false }
+                return previous.observedAt < reset && reset <= clock
+            }
+            // Age is measured from the store's last successful fetch, not the reading's own
+            // timestamp: a source that reports an older sample (Claude Desktop logs every 15 min)
+            // is still current as long as it keeps being re-read.
+            let lastFetched = max(previous.observedAt, lastRefreshSucceeded[provider] ?? .distantPast)
+            if previous.health == .live, clock.timeIntervalSince(lastFetched) > 360 || crossedReset {
+                snapshots[provider] = previous.withHealth(.stale(crossedReset
+                    ? "A reset time has passed. Awaiting a fresh reading."
+                    : "This reading is over six minutes old."))
+            }
+            let active = railIsExpanded || activity(for: provider).contains { $0.state == .working || $0.state == .waiting }
+            let interval: TimeInterval = active ? 60 : 300
+            if clock >= (nextAutomaticRefresh[provider] ?? .distantPast) {
+                refreshIfIdle(provider, for: crossedReset ? 60 : interval)
             }
         }
     }
@@ -308,7 +486,6 @@ final class UsageStore: ObservableObject {
         let pairs: [(Notification.Name, (ProviderID) -> Void)] = [
             (NSWorkspace.didLaunchApplicationNotification, { [weak self] provider in
                 self?.refresh(provider, after: .seconds(8))
-                self?.refresh(provider, after: .seconds(30))
             }),
             (NSWorkspace.didActivateApplicationNotification, { [weak self] provider in
                 self?.refreshIfIdle(provider, for: 60)

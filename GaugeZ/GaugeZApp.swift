@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var edgePanelController: EdgePanelController?
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var usageWindow: NSWindow?
     private var settingsObserver: NSObjectProtocol?
 
     static func main() {
@@ -33,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self.openSettings() }
         }
         store.refresh()
+        if !UserDefaults.standard.bool(forKey: "hasSeenIntroduction") {
+            openSettingsWindow()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -61,12 +65,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openSettingsWindow() {
+        store.updateSystemSettings()
         let window = settingsWindow ?? makeSettingsWindow()
         settingsWindow = window
         window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        present(window)
         debugSnapshot(of: window)
+    }
+
+    /// Brings one of GaugeZ's windows in front of every other app's windows. As an accessory
+    /// (menu bar) app the process is rarely active, and since macOS 14 activation is cooperative:
+    /// `makeKeyAndOrderFront` alone leaves the window behind the previously active app. Activate
+    /// first, handing focus over from the current front app, then order the window in regardless.
+    private func present(_ window: NSWindow) {
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        if #available(macOS 14.0, *) {
+            if let front = NSWorkspace.shared.frontmostApplication, front != .current {
+                NSRunningApplication.current.activate(from: front, options: [.activateIgnoringOtherApps])
+            } else {
+                NSApp.activate()
+            }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     /// Debug aid: with GAUGEZ_DEBUG_SNAPSHOTS set, renders the settings window to a PNG.
@@ -80,6 +103,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let data = rep.representation(using: .png, properties: [:]) else { return }
             try? data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("settings-window.png"))
         }
+    }
+
+    @objc private func openUsage() {
+        let window = usageWindow ?? NSWindow(contentViewController: NSHostingController(rootView: UsageOverviewView(store: store)))
+        usageWindow = window
+        window.title = "GaugeZ Usage"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 440, height: 620))
+        window.center()
+        present(window)
     }
 
     @objc private func quit() {
@@ -116,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(withTitle: "Show GaugeZ", action: #selector(toggleNotch), keyEquivalent: "")
+        menu.addItem(withTitle: "Usage…", action: #selector(openUsage), keyEquivalent: "u")
         menu.addItem(withTitle: "Refresh Usage", action: #selector(refreshUsage), keyEquivalent: "r")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
@@ -130,6 +165,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         item.menu = menu
         statusItem = item
+
+        // Status-item shortcuts alone only work while that menu is open. A main menu
+        // makes Usage, Refresh, Settings, and Quit reachable in the regular windows.
+        let mainMenu = NSMenu()
+        let appMenu = NSMenuItem(title: "GaugeZ", action: nil, keyEquivalent: "")
+        appMenu.submenu = menu.copy() as? NSMenu
+        mainMenu.addItem(appMenu)
+        NSApp.mainMenu = mainMenu
     }
 }
 

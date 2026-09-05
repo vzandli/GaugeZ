@@ -111,6 +111,22 @@ final class EdgePanelController {
     /// Screen rects of the drawn, interactive parts: the rail column and, when open, the card column.
     private var interactiveRects: [NSRect] {
         let frame = panel.frame
+        if store.edgeSide.isHorizontal {
+            let railHeight = state.isExpanded ? HorizontalRailMetrics.depth : RailMetrics.collapsedWidth
+            let railWidth = RailMetrics.shapeHeight(providerCount: store.visibleProviders.count)
+            let rail = NSRect(x: frame.midX - railWidth / 2,
+                              y: store.edgeSide == .top ? frame.maxY - railHeight : frame.minY,
+                              width: railWidth, height: railHeight)
+            var rects = [rail]
+            if state.isExpanded, state.attachment != nil {
+                let width = RailMetrics.attachmentWidth - RailMetrics.pointerDepth
+                let height = min(state.attachmentHeight + HorizontalRailMetrics.cardGap, max(0, frame.height - HorizontalRailMetrics.depth))
+                rects.append(NSRect(x: frame.midX - width / 2,
+                                    y: store.edgeSide == .top ? frame.maxY - HorizontalRailMetrics.depth - height : frame.minY + HorizontalRailMetrics.depth,
+                                    width: width, height: height))
+            }
+            return rects
+        }
         let railWidth = state.isExpanded ? RailMetrics.expandedWidth : RailMetrics.collapsedWidth
         let railRect = store.edgeSide == .right
             ? NSRect(x: frame.maxX - railWidth, y: frame.minY, width: railWidth, height: frame.height)
@@ -154,9 +170,7 @@ final class EdgePanelController {
     }
 
     func show() {
-        if store.displayMode == .hidden {
-            store.displayMode = .hover
-        }
+        guard store.displayMode != .hidden else { return }
         positionPanel(animated: false)
         panel.orderFrontRegardless()
     }
@@ -212,6 +226,10 @@ final class EdgePanelController {
     /// turn; otherwise they would read the store's *previous* value and, for example, keep the
     /// window on the old edge after the side is switched.
     private func observeSettings() {
+        store.$selectedDisplayID.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.edgeSideChanged() }.store(in: &cancellables)
+        store.$providerOrder.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.positionPanel(animated: false) }.store(in: &cancellables)
         store.$displayMode
             .removeDuplicates()
             .dropFirst()
@@ -264,6 +282,7 @@ final class EdgePanelController {
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
+                    self?.store.updateSystemSettings()
                     self?.positionPanel(animated: false)
                 }
             }
@@ -275,7 +294,7 @@ final class EdgePanelController {
     /// (the settings they just used) stays pinned until the next pointer movement away from it.
     private func edgeSideChanged() {
         debugNote("edge -> \(store.edgeSide)")
-        positionPanel(animated: true)
+        positionPanel(animated: false)
         routePointer()
         if state.isExpanded, !pointerIsOverVisibleContent {
             collapseTask?.cancel()
@@ -418,6 +437,7 @@ final class EdgePanelController {
             }
             setExpanded(isPointerInRail, animated: animated)
         case .hidden:
+            store.railIsExpanded = false
             isAttachmentPinned = false
             setAttachment(nil, animated: false)
             panel.orderOut(nil)
@@ -431,6 +451,7 @@ final class EdgePanelController {
             state.hoveredProvider = nil
             state.attachment = nil
         }
+        store.railIsExpanded = expanded
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         withAnimation(animated && !reduceMotion ? .spring(duration: 0.2, bounce: 0.1) : .easeOut(duration: animated ? 0.1 : 0)) {
             state.isExpanded = expanded
@@ -442,7 +463,7 @@ final class EdgePanelController {
     private func setAttachment(_ attachment: EdgeAttachment?, animated: Bool = true) {
         guard state.attachment != attachment else { return }
         debugNote("attachment -> \(String(describing: attachment))")
-        withAnimation(animated ? .easeOut(duration: 0.13) : nil) {
+        withAnimation(animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .easeOut(duration: 0.13) : nil) {
             state.attachment = attachment
         }
         positionPanel(animated: animated)
@@ -501,7 +522,7 @@ final class EdgePanelController {
     private func dragStarted() {
         debugNote("drag started")
         isDragging = true
-        dragStartScreenY = NSEvent.mouseLocation.y
+        dragStartScreenY = store.edgeSide.isHorizontal ? NSEvent.mouseLocation.x : NSEvent.mouseLocation.y
         dragStartVerticalPosition = store.verticalPosition
         lastSnapHaptic = abs(store.verticalPosition - 0.5) < 0.02
         collapseTask?.cancel()
@@ -513,10 +534,15 @@ final class EdgePanelController {
     private func dragMoved(screenY: CGFloat) {
         guard isDragging, let screen = preferredScreen else { return }
         let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
-        let bounds = verticalBounds(screen: screen, height: height)
+        let bounds: (minY: CGFloat, maxY: CGFloat, range: CGFloat)
+        if store.edgeSide.isHorizontal {
+            let range = max(0, screen.visibleFrame.width - HorizontalRailMetrics.width(providerCount: store.visibleProviders.count))
+            bounds = (screen.visibleFrame.minX, screen.visibleFrame.minX + range, range)
+        } else { bounds = verticalBounds(screen: screen, height: height) }
         guard bounds.range > 0 else { return }
 
-        let deltaY = screenY - dragStartScreenY
+        let position = store.edgeSide.isHorizontal ? NSEvent.mouseLocation.x : screenY
+        let deltaY = position - dragStartScreenY
         let startY = bounds.minY + bounds.range * CGFloat(dragStartVerticalPosition)
         let newY = startY + deltaY
         var newRatio = Double((newY - bounds.minY) / bounds.range)
@@ -551,14 +577,23 @@ final class EdgePanelController {
         defer { scheduleDebugSnapshot() }
         guard let screen = preferredScreen else { return }
         let visibleFrame = screen.visibleFrame
-        let width = RailMetrics.maximumPanelWidth
-        let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
-        let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX
-        let bounds = verticalBounds(screen: screen, height: height)
-        let y = bounds.minY + bounds.range * CGFloat(store.verticalPosition)
-        let frame = NSRect(x: x, y: y, width: width, height: height)
+        let frame: NSRect
+        if store.edgeSide.isHorizontal {
+            let width = min(HorizontalRailMetrics.width(providerCount: store.visibleProviders.count), visibleFrame.width)
+            let height = min(620, visibleFrame.height)
+            let x = visibleFrame.minX + max(0, visibleFrame.width - width) * CGFloat(store.verticalPosition)
+            let y = store.edgeSide == .top ? visibleFrame.maxY - height : visibleFrame.minY
+            frame = NSRect(x: x, y: y, width: width, height: height)
+        } else {
+            let width = RailMetrics.maximumPanelWidth
+            let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
+            let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX
+            let bounds = verticalBounds(screen: screen, height: height)
+            let y = bounds.minY + bounds.range * CGFloat(store.verticalPosition)
+            frame = NSRect(x: x, y: y, width: width, height: height)
+        }
         if panel.frame != frame {
-            if animated && !isDragging {
+            if animated && !isDragging && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.18
                     context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -571,7 +606,8 @@ final class EdgePanelController {
     }
 
     private var preferredScreen: NSScreen? {
-        NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
+        NSScreen.screens.first(where: { DisplayChoice.identifier(for: $0) == store.selectedDisplayID })
+            ?? NSScreen.screens.first
     }
 }
 
