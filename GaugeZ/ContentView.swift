@@ -333,9 +333,10 @@ private struct ProviderSettingsRow: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(provider.displayName)
+                    .help(provider.sourceDescription)
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(SettingsPalette.primary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                 HealthBadge(health: snapshot.health)
             }
             .frame(width: 100, alignment: .leading)
@@ -437,7 +438,7 @@ private struct AppearanceSettingsPage: View {
                         Text(problem).font(.caption).foregroundStyle(.orange).padding(12)
                     }
                     SettingsRowDivider()
-                    SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code session states from local metadata") {
+                    SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, and Grok Build session states from local metadata") {
                         Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
                     }
                     SettingsRowDivider()
@@ -699,7 +700,7 @@ private struct DiagnosticsCard: View {
         }
         .safeAreaInset(edge: .bottom) {
             HStack {
-                Button("Retry") { store.refresh(snapshot.provider) }
+                Button("Retry") { store.retry(snapshot.provider) }
                     .disabled(!store.enabledProviders.contains(snapshot.provider) || store.refreshing.contains(snapshot.provider) || store.nextRetry(for: snapshot.provider) != nil)
                 Button("Open app") { store.open(snapshot.provider) }
                 Spacer()

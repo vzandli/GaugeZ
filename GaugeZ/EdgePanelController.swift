@@ -113,7 +113,7 @@ final class EdgePanelController {
         let frame = panel.frame
         if store.edgeSide.isHorizontal {
             let railHeight = state.isExpanded ? HorizontalRailMetrics.depth : RailMetrics.collapsedWidth
-            let railWidth = RailMetrics.shapeHeight(providerCount: store.visibleProviders.count)
+            let railWidth = RailMetrics.shapeHeight(providerCount: store.railProviders.count)
             let rail = NSRect(x: frame.midX - railWidth / 2,
                               y: store.edgeSide == .top ? frame.maxY - railHeight : frame.minY,
                               width: railWidth, height: railHeight)
@@ -151,9 +151,13 @@ final class EdgePanelController {
             guard let self else { return }
             self.railHoverChanged(true)
             try? await Task.sleep(for: step)
-            for provider in self.store.visibleProviders {
-                self.providerHoverChanged(provider)
+            for page in 0..<self.store.railPageCount {
+                self.store.railPage = page
                 try? await Task.sleep(for: step)
+                for provider in self.store.railProviders {
+                    self.providerHoverChanged(provider)
+                    try? await Task.sleep(for: step)
+                }
             }
             self.providerHoverChanged(nil)
             self.toggleSettings()
@@ -226,6 +230,15 @@ final class EdgePanelController {
     /// turn; otherwise they would read the store's *previous* value and, for example, keep the
     /// window on the old edge after the side is switched.
     private func observeSettings() {
+        store.$railPage.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.attachmentTask?.cancel()
+                self.state.hoveredProvider = nil
+                self.isAttachmentPinned = false
+                self.setAttachment(nil)
+                self.positionPanel(animated: false)
+            }.store(in: &cancellables)
         store.$selectedDisplayID.dropFirst().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.edgeSideChanged() }.store(in: &cancellables)
         store.$providerOrder.dropFirst().receive(on: DispatchQueue.main)
@@ -533,10 +546,10 @@ final class EdgePanelController {
 
     private func dragMoved(screenY: CGFloat) {
         guard isDragging, let screen = preferredScreen else { return }
-        let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
+        let height = RailMetrics.panelHeight(providerCount: store.railProviders.count)
         let bounds: (minY: CGFloat, maxY: CGFloat, range: CGFloat)
         if store.edgeSide.isHorizontal {
-            let range = max(0, screen.visibleFrame.width - HorizontalRailMetrics.width(providerCount: store.visibleProviders.count))
+            let range = max(0, screen.visibleFrame.width - HorizontalRailMetrics.width(providerCount: store.railProviders.count))
             bounds = (screen.visibleFrame.minX, screen.visibleFrame.minX + range, range)
         } else { bounds = verticalBounds(screen: screen, height: height) }
         guard bounds.range > 0 else { return }
@@ -579,14 +592,14 @@ final class EdgePanelController {
         let visibleFrame = screen.visibleFrame
         let frame: NSRect
         if store.edgeSide.isHorizontal {
-            let width = min(HorizontalRailMetrics.width(providerCount: store.visibleProviders.count), visibleFrame.width)
+            let width = min(HorizontalRailMetrics.width(providerCount: store.railProviders.count), visibleFrame.width)
             let height = min(620, visibleFrame.height)
             let x = visibleFrame.minX + max(0, visibleFrame.width - width) * CGFloat(store.verticalPosition)
             let y = store.edgeSide == .top ? visibleFrame.maxY - height : visibleFrame.minY
             frame = NSRect(x: x, y: y, width: width, height: height)
         } else {
             let width = RailMetrics.maximumPanelWidth
-            let height = RailMetrics.panelHeight(providerCount: store.visibleProviders.count)
+            let height = RailMetrics.panelHeight(providerCount: store.railProviders.count)
             let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX
             let bounds = verticalBounds(screen: screen, height: height)
             let y = bounds.minY + bounds.range * CGFloat(store.verticalPosition)

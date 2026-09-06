@@ -10,7 +10,7 @@ struct UsageOverviewView: View {
             Picker("Provider", selection: $selected) {
                 ForEach(store.visibleProviders) { Text($0.displayName).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             .labelsHidden()
             .padding(.horizontal)
             if store.visibleProviders.isEmpty {

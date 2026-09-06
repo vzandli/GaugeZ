@@ -190,6 +190,9 @@ extension AppDelegate: NSMenuDelegate {
             let isExpanded = edgePanelController?.isExpanded ?? false
             toggleItem.title = isExpanded ? "Hide GaugeZ" : "Show GaugeZ"
         }
+        if let updateItem = menu.items.first(where: { $0.action == #selector(checkForUpdates) }) {
+            updateItem.title = updateManager.pendingUpdateVersion.map { "Update to \($0) Available…" } ?? "Check for Updates…"
+        }
         for item in menu.items {
             item.image = nil
         }

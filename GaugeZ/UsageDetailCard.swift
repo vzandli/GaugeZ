@@ -108,9 +108,46 @@ struct UsageDetailCard: View {
                 }
             }
 
-            if store.activityEnabled, snapshot.provider == .claude {
+            if let cost = snapshot.costInfo {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("CLAUDE CODE SESSIONS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Divider().opacity(0.15).padding(.vertical, 2)
+
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Session Usage")
+                            .font(.system(size: 12, weight: .medium))
+                        Spacer()
+                        if let formattedCost = cost.formattedCost {
+                            Text(formattedCost)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                        }
+                    }
+
+                    if let details = cost.sessionDetailLine {
+                        Text(details)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                    }
+
+                    if let balance = cost.formattedBalance, (cost.prepaidBalance ?? 0) > 0 {
+                        HStack {
+                            Text("Prepaid Balance")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.55))
+                            Spacer()
+                            Text("\(balance) credits")
+                                .font(.caption2.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                    }
+                }
+            }
+
+            if store.activityEnabled, snapshot.provider.supportsActivity {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(snapshot.provider.kind == .cursor ? "CURSOR SESSIONS" : (snapshot.provider.kind == .grok ? "GROK BUILD SESSIONS" : "CLAUDE CODE SESSIONS")).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     let sessions = store.activity(for: snapshot.provider)
                     if sessions.isEmpty {
                         Text("No verifiable session activity available.").font(.caption2).foregroundStyle(.secondary)
@@ -149,7 +186,7 @@ struct UsageDetailCard: View {
                 Text(error).font(.caption2).foregroundStyle(.orange)
             }
             HStack {
-                Button(store.refreshing.contains(snapshot.provider) ? "Refreshing…" : "Refresh") { store.refresh(snapshot.provider) }
+                Button(store.refreshing.contains(snapshot.provider) ? "Refreshing…" : "Refresh") { store.retry(snapshot.provider) }
                     .disabled(store.refreshing.contains(snapshot.provider) || store.nextRetry(for: snapshot.provider) != nil)
                     .glassControl(enabled: store.glassEnabled)
                 Spacer()

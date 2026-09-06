@@ -56,10 +56,7 @@ final class UsageStore: ObservableObject {
     @Published var selectedDisplayID: String = UserDefaults.standard.string(forKey: "selectedDisplayID") ?? "main" {
         didSet { UserDefaults.standard.set(selectedDisplayID, forKey: "selectedDisplayID") }
     }
-    @Published var providerOrder: [ProviderID] = {
-        let saved = (UserDefaults.standard.stringArray(forKey: "providerOrder") ?? []).compactMap(ProviderID.init(rawValue:))
-        return ProviderID.allCases.sorted { (saved.firstIndex(of: $0) ?? 99) < (saved.firstIndex(of: $1) ?? 99) }
-    }() {
+    @Published var providerOrder: [ProviderID] = [] {
         didSet { UserDefaults.standard.set(providerOrder.map(\.rawValue), forKey: "providerOrder") }
     }
     @Published var headlineWindows: [String: String] = UserDefaults.standard.dictionary(forKey: "headlineWindows") as? [String: String] ?? [:] {
@@ -118,16 +115,37 @@ final class UsageStore: ObservableObject {
     private func configureActivity() {
         activityTask?.cancel()
         sessions = []
-        guard !isPreview, activityEnabled, enabledProviders.contains(.claude) else { return }
+        guard !isPreview, activityEnabled, enabledProviders.contains(where: \.supportsActivity) else { return }
         activityTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let reader = self?.activityReader else { return }
-                let found = await reader.readClaudeSessions()
+                let enabled = self?.visibleProviders ?? []
+                var found: [ActivitySession] = []
+                for provider in enabled where provider.kind == .claude {
+                    found += await reader.readClaudeSessions(profile: ClaudeProfile(provider: provider))
+                }
+                if enabled.contains(.cursor) {
+                    let app = NSWorkspace.shared.runningApplications.first {
+                        $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92" || $0.bundleURL?.lastPathComponent == "Cursor.app"
+                    }
+                    let launchedAt = app.map { $0.launchDate ?? .distantPast }
+                    found += await reader.readCursorSessions(launchedAt: launchedAt)
+                }
+                if enabled.contains(.grok) {
+                    found += await reader.readGrokSessions()
+                }
+                found = ActivityReader.prioritized(found)
                 guard !Task.isCancelled else { return }
                 if self?.sessions != found { self?.sessions = found }
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+    }
+
+    /// Explicit retry can ask for Keychain permission again; automatic polling never clears a refusal.
+    func retry(_ provider: ProviderID) {
+        providers[provider]?.forgetCredentials()
+        refresh(provider)
     }
 
     func forget(_ provider: ProviderID) {
@@ -142,6 +160,7 @@ final class UsageStore: ObservableObject {
         refreshGenerations[provider] = nil
         refreshing.remove(provider)
         ProviderRetryPolicy(provider: provider).reset()
+        providers[provider]?.forgetCredentials()
         snapshots[provider] = .placeholder(for: provider)
         actionErrors[provider] = nil
         SnapshotCache.save(Array(snapshots.values))
@@ -151,14 +170,7 @@ final class UsageStore: ObservableObject {
         Color.indicatorVariants(fromHex: indicatorColorHex)
     }
 
-    private let providers: [ProviderID: any UsageProviding] = [
-        .codex: CodexUsageProvider(),
-        .claude: ClaudeUsageProvider(selectedSource: {
-            ClaudeSource(rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? "") ?? .desktop
-        }),
-        .cursor: CursorUsageProvider(),
-        .antigravity: AntigravityUsageProvider()
-    ]
+    private var providers: [ProviderID: any UsageProviding] = [:]
     private var refreshTasks: [ProviderID: Task<Void, Never>] = [:]
     private var periodicTask: Task<Void, Never>?
     private var wakeObserver: NSObjectProtocol?
@@ -186,16 +198,34 @@ final class UsageStore: ObservableObject {
     }
 
     init() {
+        let previewCount = min(20, max(1, Int(ProcessInfo.processInfo.environment["GAUGEZ_PREVIEW_PROFILES"] ?? "2") ?? 2))
+        let profiles = isPreview
+            ? [ClaudeProfile()] + (1..<previewCount).map { index in
+                ClaudeProfile(provider: ProviderID(rawValue: index == 1 ? "claude-work" : "claude-profile-\(index)")!)
+            }
+            : ClaudeProfile.discover()
+        let available = profiles.map(\.provider) + ProviderID.allCases.filter { $0 != .claude }
         snapshots = Dictionary(
-            uniqueKeysWithValues: ProviderID.allCases.map { provider in
+            uniqueKeysWithValues: available.map { provider in
                 (provider, .placeholder(for: provider))
             }
         )
 
+        let savedOrder = (UserDefaults.standard.stringArray(forKey: "providerOrder") ?? []).compactMap(ProviderID.init(rawValue:))
+        var seen: Set<ProviderID> = []
+        providerOrder = (savedOrder.filter(available.contains) + available).filter { seen.insert($0).inserted }
         if let stored = UserDefaults.standard.stringArray(forKey: Keys.enabledProviders) {
-            enabledProviders = Set(stored.compactMap(ProviderID.init(rawValue:)))
+            enabledProviders = Set(stored.compactMap(ProviderID.init(rawValue:))).intersection(available)
+            // Existing switches stay off. Newly discovered accounts/providers start disabled until enabled.
         } else {
-            enabledProviders = Set(ProviderID.allCases)
+            enabledProviders = Set(available)
+        }
+        providers = [.codex: CodexUsageProvider(), .cursor: CursorUsageProvider(),
+                     .antigravity: AntigravityUsageProvider(), .glm: GLMUsageProvider(), .grok: GrokUsageProvider()]
+        for profile in profiles {
+            providers[profile.provider] = ClaudeUsageProvider(profile: profile, selectedSource: {
+                ClaudeSource(rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? "") ?? .desktop
+            })
         }
 
         displayMode = DisplayMode(
@@ -221,17 +251,19 @@ final class UsageStore: ObservableObject {
         }
 
         if isPreview {
-            enabledProviders = Set(ProviderID.allCases)
-            providerOrder = ProviderID.allCases
+            enabledProviders = Set(available)
+            providerOrder = available
             headlineWindows = [:]
             displayMode = .hover
             activityEnabled = true
             sessions = [ActivitySession(id: "preview", provider: .claude, name: "GaugeZ", project: "GaugeZ",
-                                        state: .waiting, waitingReason: "Review the proposed changes")]
-            snapshots = Dictionary(uniqueKeysWithValues: ProviderID.allCases.enumerated().map { index, provider in
+                                        state: .waiting, waitingReason: "Review the proposed changes"),
+                        ActivitySession(id: "preview-cursor", provider: .cursor, name: "Build usage dashboard", project: "GaugeZ",
+                                        state: .working, waitingReason: nil)]
+            snapshots = Dictionary(uniqueKeysWithValues: available.enumerated().map { index, provider in
                 (provider, UsageSnapshot(provider: provider, accountID: nil, planName: "Preview plan",
                     windows: [
-                        UsageWindow(id: "session", label: "5-hour limit", usedPercent: index == 2 ? 100 : 20 + index * 15,
+                        UsageWindow(id: "session", label: "5-hour limit", usedPercent: index == 2 ? 100 : (20 + index * 15) % 100,
                                     resetsAt: Date().addingTimeInterval(3600), durationMinutes: 300),
                         UsageWindow(id: "weekly", label: "Weekly limit", usedPercent: 35,
                                     resetsAt: Date().addingTimeInterval(172800), durationMinutes: 10080)
@@ -277,9 +309,25 @@ final class UsageStore: ObservableObject {
         providerOrder.filter(enabledProviders.contains)
     }
 
+    @Published var railPage = 0
+
+    var railPageCapacity: Int {
+        let screen = NSScreen.screens.first { DisplayChoice.identifier(for: $0) == selectedDisplayID } ?? NSScreen.screens.first
+        let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
+        let length = (edgeSide.isHorizontal ? frame.width : frame.height) - 24
+        let fixed = RailMetrics.shapeHeight(providerCount: 1) - RailMetrics.rowHeight
+        return max(1, Int((length - fixed + RailMetrics.rowSpacing) / (RailMetrics.rowHeight + RailMetrics.rowSpacing)))
+    }
+
+    var railPageCount: Int { max(1, (visibleProviders.count + railPageCapacity - 1) / railPageCapacity) }
+    var currentRailPage: Int { min(max(0, railPage), railPageCount - 1) }
+    var railProviders: [ProviderID] {
+        Array(visibleProviders.dropFirst(currentRailPage * railPageCapacity).prefix(railPageCapacity))
+    }
+
     /// Providers that have a working adapter behind them.
     var connectedProviders: [ProviderID] {
-        ProviderID.allCases.filter { providers[$0] != nil }
+        providerOrder.filter { providers[$0] != nil }
     }
 
     func snapshot(for provider: ProviderID) -> UsageSnapshot {
@@ -351,18 +399,29 @@ final class UsageStore: ObservableObject {
 
     /// The Claude usage endpoint rate-limits polling faster than every few minutes, so Claude
     /// never inherits the 60 s "active" cadence the local providers can afford.
-    private static let minimumPollInterval: [ProviderID: TimeInterval] = [.claude: 300]
-
     private func refreshIfIdle(_ provider: ProviderID, for interval: TimeInterval) {
         let last = lastRefreshStarted[provider] ?? .distantPast
-        let floor = Self.minimumPollInterval[provider] ?? 0
+        let floor: TimeInterval = (provider.kind == .claude || provider.kind == .grok) ? 300 : 0
         guard Date().timeIntervalSince(last) >= max(interval, floor) else { return }
         refresh(provider)
     }
 
     func open(_ provider: ProviderID) {
-        guard let url = provider.applicationURL else { return }
         actionErrors[provider] = nil
+        if provider.kind == .grok {
+            switch GrokInstallation.openInTerminal() {
+            case .opened: return
+            case .failed(let message):
+                actionErrors[provider] = message
+                return
+            case .notInstalled: break
+            }
+        }
+        guard let url = provider.applicationURL else { return }
+        if !url.isFileURL {
+            NSWorkspace.shared.open(url)
+            return
+        }
         NSWorkspace.shared.openApplication(at: url, configuration: .init()) { [weak self] _, error in
             guard error != nil else { return }
             Task { @MainActor [weak self] in
@@ -535,6 +594,16 @@ enum SnapshotCache {
         let windows: [UsageWindow]
         let observedAt: Date
         let source: String
+        let costInfo: ProviderCostInfo?
+
+        init(provider: ProviderID, planName: String?, windows: [UsageWindow], observedAt: Date, source: String, costInfo: ProviderCostInfo? = nil) {
+            self.provider = provider
+            self.planName = planName
+            self.windows = windows
+            self.observedAt = observedAt
+            self.source = source
+            self.costInfo = costInfo
+        }
     }
 
     static let staleMessage = "Showing the last known values. Refresh to update."
@@ -557,7 +626,8 @@ enum SnapshotCache {
                 windows: entry.windows,
                 observedAt: entry.observedAt,
                 source: entry.source,
-                health: .stale(staleMessage)
+                health: .stale(staleMessage),
+                costInfo: entry.costInfo
             )
         }
     }
@@ -566,7 +636,7 @@ enum SnapshotCache {
         let entries = snapshots
             .filter { !$0.windows.isEmpty }
             .sorted { $0.provider.rawValue < $1.provider.rawValue }
-            .map { Entry(provider: $0.provider, planName: $0.planName, windows: $0.windows, observedAt: $0.observedAt, source: $0.source) }
+            .map { Entry(provider: $0.provider, planName: $0.planName, windows: $0.windows, observedAt: $0.observedAt, source: $0.source, costInfo: $0.costInfo) }
         do {
             let url = fileURL
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

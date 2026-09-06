@@ -80,7 +80,7 @@ struct ProviderMeterView: View {
             }
         }
         .contextMenu {
-            Button("Refresh") { store.refresh(snapshot.provider) }
+            Button("Refresh") { store.retry(snapshot.provider) }
                 .disabled(store.refreshing.contains(snapshot.provider) || store.nextRetry(for: snapshot.provider) != nil)
             Button("Open \(snapshot.provider.displayName)") { store.open(snapshot.provider) }
         }

@@ -1,5 +1,6 @@
 import AppKit
 import CommonCrypto
+import CryptoKit
 import Foundation
 import Security
 
@@ -13,32 +14,40 @@ import Security
 actor ClaudeUsageProvider: UsageProviding {
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private static let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
-    static let keychainServicePrefix = "Claude Code"
-    static let preferredKeychainService = "Claude Code-credentials"
 
     private let session: URLSession
     private let selectedSource: @Sendable () -> ClaudeSource
-    private let retryPolicy = ProviderRetryPolicy(provider: .claude)
+    private let retryPolicy: ProviderRetryPolicy
+    private let profile: ClaudeProfile
+    private let loadCredentials: (@Sendable () throws -> ClaudeCredential)?
+    nonisolated private let credentialCache = ClaudeCredentialCache()
 
-    init(selectedSource: @escaping @Sendable () -> ClaudeSource) {
+    init(profile: ClaudeProfile = ClaudeProfile(), session: URLSession? = nil,
+         retryPolicy: ProviderRetryPolicy? = nil,
+         loadCredentials: (@Sendable () throws -> ClaudeCredential)? = nil,
+         selectedSource: @escaping @Sendable () -> ClaudeSource) {
+        self.profile = profile
+        self.loadCredentials = loadCredentials
+        self.retryPolicy = retryPolicy ?? ProviderRetryPolicy(provider: profile.provider)
         self.selectedSource = selectedSource
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.waitsForConnectivity = false
         configuration.urlCache = nil
-        session = URLSession(configuration: configuration)
+        self.session = session ?? URLSession(configuration: configuration)
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        let source = selectedSource()
+        let source: ClaudeSource = profile.provider.profileSlug == nil ? selectedSource() : .claudeCode
         switch source {
         case .claudeCode:
             return try await fetchViaClaudeCode()
         case .desktop:
-            // Claude Desktop keeps its own usage log current, so a fresh log is the primary
-            // reading; the rate-limited API is only asked when the log has gone stale.
+            // A very recent desktop sample is the primary reading; otherwise the rate-limited
+            // endpoint is asked, and the log remains the fallback when that fails.
             let local = try? ClaudeDesktopUsageReader.latestSnapshot()
-            if let local, local.health == .live { return local }
+            if let local, local.health == .live,
+               Date().timeIntervalSince(local.observedAt) <= ClaudeDesktopUsageReader.preferredAge { return local }
             do {
                 return try await fetchViaClaudeDesktop()
             } catch {
@@ -48,8 +57,14 @@ actor ClaudeUsageProvider: UsageProviding {
         }
     }
 
+    nonisolated func forgetCredentials() { credentialCache.forget() }
+
     private func fetchViaClaudeCode() async throws -> UsageSnapshot {
-        let credential = try ClaudeCredentialReader.load()
+        if let loadCredentials { return try await fetchViaCredential(loadCredentials()) }
+        let match = try ClaudeKeychain.newest(service: profile.keychainService)
+        let credential = try credentialCache.value(stamp: match) {
+            try ClaudeCredentialReader.load(profile: profile, match: match)
+        }
         return try await fetchViaCredential(credential)
     }
 
@@ -72,7 +87,7 @@ actor ClaudeUsageProvider: UsageProviding {
         guard !windows.isEmpty else { throw ClaudeProviderError.noUsageWindows }
 
         return UsageSnapshot(
-            provider: .claude,
+            provider: profile.provider,
             accountID: identity?.email,
             planName: planName(credential: credential, identity: identity),
             windows: windows,
@@ -123,13 +138,14 @@ actor ClaudeUsageProvider: UsageProviding {
     /// describe a different account from the selected desktop source. Memoized per token so
     /// the profile endpoint is hit once per credential, not once per refresh.
     private func resolveIdentity(token: String) async -> ClaudeIdentity? {
-        if let cached = cachedIdentity, cached.token == token { return cached.identity }
+        let fingerprint = SHA256.hash(data: Data(token.utf8))
+        if let cached = cachedIdentity, cached.fingerprint == fingerprint { return cached.identity }
         let identity = await requestIdentity(token: token)
-        if let identity { cachedIdentity = (token, identity) }
+        if let identity { cachedIdentity = (fingerprint, identity) }
         return identity
     }
 
-    private var cachedIdentity: (token: String, identity: ClaudeIdentity)?
+    private var cachedIdentity: (fingerprint: SHA256.Digest, identity: ClaudeIdentity)?
 
     private func requestIdentity(token: String) async -> ClaudeIdentity? {
         var request = URLRequest(url: Self.profileURL)
@@ -168,7 +184,7 @@ actor ClaudeUsageProvider: UsageProviding {
 
 // MARK: - Credential access
 
-struct ClaudeCredential {
+struct ClaudeCredential: Sendable {
     let accessToken: String
     let expiresAt: Date?
     let subscriptionType: String?
@@ -182,90 +198,18 @@ struct ClaudeIdentity {
 }
 
 enum ClaudeCredentialReader {
-    /// Locates the Claude Code sign-in. Keychain items take precedence over the file fallback
-    /// that Claude Code writes on systems without a Keychain.
-    static func load() throws -> ClaudeCredential {
-        var sawPermissionProblem: OSStatus?
-
-        for service in candidateKeychainServices() {
-            switch readKeychainItem(service: service) {
-            case .success(let data):
-                return try decode(data, source: "via Claude Code (Keychain)")
-            case .failure(.notFound):
-                continue
-            case .failure(.denied(let status)):
-                sawPermissionProblem = status
-            case .failure(.other(let status)):
-                sawPermissionProblem = sawPermissionProblem ?? status
-            }
+    /// Reads only this profile; never falls through to another account's service.
+    static func load(profile: ClaudeProfile, match: ClaudeKeychain.Match?) throws -> ClaudeCredential {
+        if let match {
+            return try decode(ClaudeKeychain.read(match), source: "via \(profile.provider.displayName) Code (Keychain)")
         }
-
-        if let fileData = readCredentialFile() {
-            return try decode(fileData, source: "via Claude Code (credentials file)")
+        if let data = try? Data(contentsOf: profile.credentialsFile) {
+            return try decode(data, source: "via \(profile.provider.displayName) Code (credentials file)")
         }
-
-        if let status = sawPermissionProblem {
-            throw ClaudeProviderError.keychainDenied(status)
+        if profile.provider.profileSlug != nil {
+            throw ClaudeProviderError.profileNotSignedIn(profile.signInGuidance)
         }
         throw ClaudeProviderError.notSignedIn
-    }
-
-    private static func candidateKeychainServices() -> [String] {
-        var services = [ClaudeUsageProvider.preferredKeychainService]
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true
-        ]
-        var result: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-           let items = result as? [[String: Any]] {
-            for item in items {
-                guard
-                    let service = item[kSecAttrService as String] as? String,
-                    service.hasPrefix(ClaudeUsageProvider.keychainServicePrefix),
-                    !services.contains(service)
-                else { continue }
-                services.append(service)
-            }
-        }
-        return services
-    }
-
-    private enum KeychainFailure: Error {
-        case notFound
-        case denied(OSStatus)
-        case other(OSStatus)
-    }
-
-    private static func readKeychainItem(service: String) -> Result<Data, KeychainFailure> {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        switch status {
-        case errSecSuccess:
-            guard let data = result as? Data, !data.isEmpty else { return .failure(.notFound) }
-            return .success(data)
-        case errSecItemNotFound:
-            return .failure(.notFound)
-        case errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed, errSecInteractionRequired:
-            return .failure(.denied(status))
-        default:
-            return .failure(.other(status))
-        }
-    }
-
-    private static func readCredentialFile() -> Data? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude")
-            .appendingPathComponent(".credentials.json")
-        return try? Data(contentsOf: url)
     }
 
     private static func decode(_ data: Data, source: String) throws -> ClaudeCredential {
@@ -550,6 +494,7 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
     case noDesktopLog
     case desktopLogMalformed
     case notSignedIn
+    case profileNotSignedIn(String)
     case keychainDenied(OSStatus)
     case malformedCredential
     case tokenExpired
@@ -571,6 +516,8 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
             "Claude's usage log has an unsupported format."
         case .notSignedIn:
             "No Claude Code CLI sign-in was found in Keychain. Run `claude` and sign in, or switch the Claude source to the desktop app."
+        case .profileNotSignedIn(let guidance):
+            guidance
         case .keychainDenied:
             "GaugeZ needs permission to read the Claude Code sign-in from your Keychain."
         case .malformedCredential:
@@ -601,11 +548,11 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
     var providerHealth: ProviderHealth {
         let message = errorDescription ?? "Unknown Claude error"
         switch self {
-        case .noDesktopLog, .notSignedIn, .tokenExpired, .unauthorized:
+        case .noDesktopLog, .notSignedIn, .profileNotSignedIn, .unauthorized:
             return .signedOut(message)
         case .keychainDenied:
             return .permissionRequired(message)
-        case .rateLimited, .offline, .server:
+        case .tokenExpired, .rateLimited, .offline, .server:
             return .stale(message)
         case .forbidden, .malformedCredential, .unexpectedStatus, .malformedResponse,
              .invalidUtilization, .noUsageWindows, .desktopLogMalformed:
@@ -622,9 +569,13 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
 enum ClaudeDesktopUsageReader {
     static let bundleIdentifier = "com.anthropic.claudefordesktop"
 
-    /// The desktop app samples every few minutes while it runs; anything older than this is
-    /// shown as stale rather than live.
+    /// The desktop app samples about every 15 minutes while it runs; anything older than this is
+    /// shown as stale rather than live when the log is the only reading available.
     static let freshnessInterval: TimeInterval = 20 * 60
+
+    /// Usage from Claude Code or the web is not in the log until the desktop app's next sample,
+    /// so the log is preferred over the endpoint only while it is younger than the poll floor.
+    static let preferredAge: TimeInterval = 5 * 60
 
     struct Sample: Equatable {
         let time: Date

@@ -6,8 +6,8 @@
 
 **Your AI subscription limits, one glance away.**
 
-A native macOS edge rail that shows how much of your Claude, Codex, Cursor, and Antigravity
-quota is left, on any screen edge.
+A native macOS edge rail that shows how much of your Claude, Codex, Cursor, Antigravity, GLM,
+and Grok Build quota is left, on any screen edge.
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)](#building-from-source)
@@ -16,7 +16,7 @@ quota is left, on any screen edge.
 
 <br>
 
-<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail expanded on the right edge of the screen, with the Codex detail card showing 5-hour and weekly limits">
+<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail on the right edge with Claude, Cursor, Codex, Antigravity, Grok Build, and GLM rings, and the Antigravity detail card showing Claude/GPT and Gemini 5-hour and weekly limits">
 
 </div>
 
@@ -44,18 +44,27 @@ expand it, glance at the rings, and get back to work.
 - **Liquid Glass.** On macOS 26 the rail uses native glass with a 0 to 100 percent
   transparency slider. Older systems get a clean solid surface.
 - **Menu bar companion.** Toggle the rail, refresh, open settings, or check for updates
-  from the status item.
-- **Session activity.** Opt in to Claude Code working, waiting, idle, and unknown states
-  from its local session registry. Cards show session names, projects, and waiting reasons.
-  Only records with a verifiable running process are shown; other providers do not yet
-  expose activity through GaugeZ.
+  from the status item. An update found while GaugeZ is in the background is announced
+  there instead of in an alert you might not see.
+- **Multiple Claude Code accounts.** Used `~/.claude-*` profiles are discovered at launch,
+  with separate rings, session lists, settings, cached readings, and retry deadlines.
+  The default Claude ring keeps its Desktop/CLI source choice. Extra profiles always read
+  their own Claude Code sign-in. Enable newly added profiles in Settings after upgrading.
+- **Session activity.** Opt in to Claude Code, Cursor, and Grok Build activity from local
+  metadata. Cards show session names, projects, and waiting reasons. Claude and Grok Build
+  records require a verifiable running process; Cursor working states require a running
+  editor and a write within 15 minutes, after its current launch when the launch time is
+  available.
+- **Accounts that fit.** When enabled accounts exceed the display's available space,
+  a page control in the drag handle lets you cycle through them on any edge.
 - **Make it yours.** Reorder providers, choose a persistent display, position the rail on
   any of its four edges, and enable launch at login. All edges share the same curved rail,
   settings orb, colored collapsed tab, and drag handle; horizontal text stays upright.
 - **Keyboard access.** Choose **Usage…** in the menu bar for a regular, focusable usage
   window. Surfaces respect Reduce Transparency and Increase Contrast.
 - **Diagnostics.** See each reading’s source, observation time, and next retry. Retry a
-  provider, open its app, or forget its cached reading.
+  provider (which also re-asks for a previously denied Keychain read), open its app, or
+  forget its cached reading.
 - **Automatic updates.** Signed and verified with Sparkle. See [Updates](#updates).
 
 ## Providers
@@ -66,19 +75,33 @@ expand it, glance at the rings, and get back to work.
 | **Codex** | The app-server bundled with Codex (or ChatGPT), over a local process. |
 | **Cursor** | Cursor's local sign-in, used to ask cursor.com for your plan usage. |
 | **Antigravity** | The language server of a running Antigravity app or IDE, asked for its model quotas. |
+| **GLM** | Z.ai Coding Plan usage, using a readable key held by Claude Code, ZCode, or OpenCode; supports global and China consoles. |
+| **Grok Build** | The xAI account sign-in in `~/.grok/auth.json`, asked via its billing service for allowance and on-demand spend. |
 
-Each provider can be switched off independently in Settings, and a failure in one never
-affects the others.
+Each provider and Claude profile can be switched off independently in Settings, and a
+failure in one never affects the others. New providers and profiles start disabled for
+existing installations, preserving your enabled-provider choices.
+
+GLM reads the default Claude Code `settings.json`, ZCode's plan configuration or readable
+credential file, then OpenCode's auth file. Encrypted ZCode credentials are skipped.
+Custom Claude directories are discovered through the `~/.claude-<name>` convention;
+arbitrary `CLAUDE_CONFIG_DIR` paths outside that convention are not discovered.
 
 ## Privacy
 
 GaugeZ is a local companion app.
 
 - It talks only to the providers you enable, using the sign-in those apps already have.
-- Tokens stay in memory for the duration of a request. They are never written to disk
-  or logged.
-- Optional activity monitoring reads Claude Code session metadata locally and does not
-  persist it. It does not read conversation transcripts.
+- Tokens are never written to disk or logged. Claude Code credentials are cached in
+  memory until their Keychain item changes or you explicitly retry/forget the reading.
+  Duplicate Keychain entries are resolved by modification time, within the selected profile.
+  A denied secret read is not repeated by automatic polling while that item is unchanged.
+- Optional activity monitoring reads Claude Code session metadata, Cursor composer
+  headers, and Grok Build's active-session list and session titles locally without
+  persisting them. It does not read conversation transcripts. The Grok Build card also
+  reads the token and cost totals from the latest session's local update log.
+- Open Grok Build starts the installed `grok` CLI in Terminal, which asks for Automation
+  permission the first time. Nothing else launches or scripts other apps.
 - No analytics, no telemetry, no accounts. The only outbound connection GaugeZ makes on
   its own is the update check against this repository's releases.
 
@@ -100,8 +123,11 @@ without Gatekeeper warnings.
 ## Updates
 
 GaugeZ checks for updates automatically and can be checked manually from the menu bar or
-**Settings → Updates**. Every update is signed with an EdDSA key and verified before it
-is installed, and the feed is served straight from GitHub Releases.
+**Settings → Updates**. Because GaugeZ has no Dock presence, a scheduled check that finds
+an update shows an alert only when GaugeZ already has focus; otherwise the menu bar item
+changes to **Update to x.y.z Available…** until you choose it. Every update is signed with
+an EdDSA key and verified before it is installed, and the feed is served straight from
+GitHub Releases.
 
 ## Building from source
 
@@ -114,6 +140,12 @@ open GaugeZ.xcodeproj
 Select the **GaugeZ** scheme and run. Xcode resolves the single dependency,
 [Sparkle](https://github.com/sparkle-project/Sparkle), through Swift Package Manager.
 The project opens in Xcode 26.6 or later.
+
+Run the fixture-based provider regression checks without accessing real credentials:
+
+```sh
+./scripts/test-providers.sh
+```
 
 Or from the terminal:
 
@@ -134,13 +166,19 @@ GaugeZ/
 ├── AttachedSettingsView.swift  Compact rail settings
 ├── RailSurfaces.swift          Glass and accessible surface rendering
 ├── UsageOverviewView.swift     Keyboard-accessible usage window
-├── ActivityReader.swift        Opt-in Claude Code session metadata
+├── ActivityReader.swift        Opt-in Claude Code, Cursor, and Grok Build session metadata
 ├── ProviderRetryPolicy.swift   Persistent per-provider rate-limit backoff
 ├── ContentView.swift           Settings: Providers, Appearance, Diagnostics, Updates
 ├── UsageStore.swift            Refresh scheduling, cache policy, normalized snapshots
-├── UsageModels.swift           Provider IDs, windows, health states
+├── UsageModels.swift           Provider IDs (including Claude profiles), windows, health states
+├── ClaudeProfile.swift         ~/.claude-* discovery and per-profile Keychain service names
+├── ClaudeKeychain.swift        Metadata-first Keychain reads and the in-memory credential cache
+├── GLMCredentials.swift        Z.ai key discovery across Claude Code, ZCode, and OpenCode
 ├── *UsageProvider.swift        One adapter per provider
-└── UpdateManager.swift         Sparkle integration
+├── UpdateManager.swift         Sparkle integration with gentle background reminders
+└── GaugeZ.entitlements         Apple Events automation for Open Grok Build
+Tests/                          Fixture-based provider regression checks
+scripts/test-providers.sh       Compiles the adapters with the checks and runs them
 ```
 
 ## Contributing
@@ -151,22 +189,28 @@ guessed number when the upstream format changes.
 
 ## Thanks
 
+GLM credential discovery includes code adapted from Codenotch (MIT); see
+[Third-party notices](GaugeZ/ThirdPartyNotices.txt).
+
 Design inspiration for the edge rail came from [@hivinz_](https://x.com/hivinz_). Thank you.
 
 ## Refresh behavior
 
 GaugeZ coalesces refreshes per provider. Automatic reads run roughly every minute while
 its rail is expanded or a monitored session is working/waiting, and every five minutes
-otherwise. Claude is polled at most every five minutes because its usage endpoint
-rate-limits faster polling; with the desktop app as source, its local usage log is read
-first and the endpoint only when that log is stale. GaugeZ also refreshes after wake and
-network recovery. Claude and Cursor retry penalties survive relaunches, increase after
-repeated throttling, and honor server retry deadlines up to 15 minutes; the last good
-reading stays on screen during a backoff. Forgetting a reading, disabling a provider, or
-switching the Claude source clears its penalty. Passing a reset time marks an old reading
-stale until the provider confirms its new value.
+otherwise. Claude and Grok Build are polled at most every five minutes because their usage
+endpoints rate-limit faster polling. With the desktop app as Claude source, its local usage
+log is used while it is under five minutes old and the endpoint otherwise, since the desktop
+app only samples about every 15 minutes and does not see Claude Code or web usage until its
+next sample. GaugeZ also refreshes after wake and network recovery. Claude, Cursor, GLM, and
+Grok Build retry penalties survive relaunches, increase after repeated throttling, and honor
+server retry deadlines up to 15 minutes; the last good reading stays on screen during a
+backoff. Forgetting a reading, disabling a provider, or switching the Claude source clears
+its penalty. Passing a reset time marks an old reading stale until the provider confirms its
+new value.
 
-For a local visual preview without provider reads or update checks:
+For a local visual preview without provider reads or update checks (add
+`GAUGEZ_PREVIEW_PROFILES=4` to preview several Claude profiles and rail paging):
 
 ```sh
 GAUGEZ_PREVIEW_DATA=1 GAUGEZ_DEBUG_DEMO=1 GAUGEZ_DEBUG_EDGE=top /path/to/GaugeZ.app/Contents/MacOS/GaugeZ

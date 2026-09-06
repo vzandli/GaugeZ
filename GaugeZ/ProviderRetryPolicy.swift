@@ -9,11 +9,20 @@ struct ProviderRetryError: LocalizedError, ProviderHealthDescribing {
 /// Only the retry deadline and attempt count are persisted, never account data.
 struct ProviderRetryPolicy {
     let provider: ProviderID
+    private let defaults: UserDefaults
+    private let now: @Sendable () -> Date
+
+    init(provider: ProviderID, defaults: UserDefaults = .standard, now: @escaping @Sendable () -> Date = { .now }) {
+        self.provider = provider
+        self.defaults = defaults
+        self.now = now
+    }
+
     private var prefix: String { "retry.\(provider.rawValue)" }
 
     var deadline: Date? {
-        guard let date = UserDefaults.standard.object(forKey: prefix + ".until") as? Date,
-              date > .now else { return nil }
+        guard let date = defaults.object(forKey: prefix + ".until") as? Date,
+              date > now() else { return nil }
         return date
     }
 
@@ -25,15 +34,15 @@ struct ProviderRetryPolicy {
 
     /// Clears the deadline and backoff so a user action (forget, disable, source switch) can always refresh.
     func reset() {
-        UserDefaults.standard.removeObject(forKey: prefix + ".until")
-        UserDefaults.standard.removeObject(forKey: prefix + ".attempts")
+        defaults.removeObject(forKey: prefix + ".until")
+        defaults.removeObject(forKey: prefix + ".attempts")
     }
 
     /// A server-supplied Retry-After is honored only up to this bound so one bad header cannot wedge a provider.
     static let maximumDelay: TimeInterval = 900
 
     func throttled(response: HTTPURLResponse) -> ProviderRetryError {
-        let attempt = min(10, max(0, UserDefaults.standard.integer(forKey: prefix + ".attempts")))
+        let attempt = min(10, max(0, defaults.integer(forKey: prefix + ".attempts")))
         let floor = min(Self.maximumDelay, 60 * pow(2, Double(attempt)))
         var delay = floor
         if let raw = response.value(forHTTPHeaderField: "Retry-After") {
@@ -45,13 +54,13 @@ struct ProviderRetryPolicy {
                 formatter.timeZone = TimeZone(secondsFromGMT: 0)
                 formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
                 if let date = formatter.date(from: raw) {
-                    delay = max(floor, min(Self.maximumDelay, date.timeIntervalSinceNow))
+                    delay = max(floor, min(Self.maximumDelay, date.timeIntervalSince(now())))
                 }
             }
         }
-        let until = Date().addingTimeInterval(delay)
-        UserDefaults.standard.set(until, forKey: prefix + ".until")
-        UserDefaults.standard.set(attempt + 1, forKey: prefix + ".attempts")
+        let until = now().addingTimeInterval(delay)
+        defaults.set(until, forKey: prefix + ".until")
+        defaults.set(attempt + 1, forKey: prefix + ".attempts")
         return ProviderRetryError(until: until)
     }
 }

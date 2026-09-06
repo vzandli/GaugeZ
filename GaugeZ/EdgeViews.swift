@@ -101,7 +101,7 @@ struct EdgePanelContentView: View {
 
     private var verticalContent: some View {
         let edge = store.edgeSide
-        let providers = store.visibleProviders
+        let providers = store.railProviders
         let shapeHeight = RailMetrics.shapeHeight(providerCount: providers.count)
 
         let edgeAlignment: Alignment = edge == .right ? .topTrailing : .topLeading
@@ -177,6 +177,22 @@ struct RailDragHandle: View {
             .allowsHitTesting(false)
         }
         .frame(width: RailMetrics.expandedWidth, height: RailMetrics.shoulderHeight + RailMetrics.bodyTopInset)
+        .overlay(alignment: .bottom) {
+            if store.railPageCount > 1 {
+                Button {
+                    store.railPage = (store.currentRailPage + 1) % store.railPageCount
+                } label: {
+                    Text("\(store.currentRailPage + 1)/\(store.railPageCount)")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+                .rotationEffect(.degrees(store.edgeSide.isHorizontal ? 90 : 0))
+                .offset(y: 4)
+                .help("Show the next page of accounts")
+                .accessibilityLabel("Account page \(store.currentRailPage + 1) of \(store.railPageCount). Show next page")
+            }
+        }
         .contentShape(Rectangle())
         .help(store.edgeSide.isHorizontal ? "Drag horizontally to reposition GaugeZ" : "Drag vertically to reposition GaugeZ")
         .accessibilityLabel(store.edgeSide.isHorizontal ? "Drag handle to reposition GaugeZ horizontally" : "Drag handle to reposition GaugeZ vertically")
@@ -632,7 +648,7 @@ struct ProviderLogo: View {
     let size: CGFloat
 
     var body: some View {
-        Image(provider.logoAssetName)
+        ((provider.kind == .glm || provider.kind == .grok) ? Image(systemName: provider.symbolName) : Image(provider.logoAssetName))
             .renderingMode(.template)
             .resizable()
             .interpolation(.high)

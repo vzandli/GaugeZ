@@ -1,9 +1,11 @@
 import Combine
+import Foundation
 import Sparkle
 
 @MainActor
 final class UpdateManager: ObservableObject {
     let updaterController: SPUStandardUpdaterController
+    private let reminders = GentleUpdateReminders()
     private var canCheckObservation: NSKeyValueObservation?
 
     @Published var automaticallyChecksForUpdates: Bool {
@@ -14,19 +16,29 @@ final class UpdateManager: ObservableObject {
 
     @Published private(set) var canCheckForUpdates = false
 
+    /// A scheduled update found while GaugeZ was in the background. It is surfaced in the menu
+    /// bar instead of an alert nobody sees; choosing Check for Updates shows it immediately.
+    @Published private(set) var pendingUpdateVersion: String?
+
     init() {
         let controller = SPUStandardUpdaterController(
-            startingUpdater: ProcessInfo.processInfo.environment["GAUGEZ_PREVIEW_DATA"] != "1",
+            startingUpdater: false,
             updaterDelegate: nil,
-            userDriverDelegate: nil
+            userDriverDelegate: reminders
         )
         updaterController = controller
         automaticallyChecksForUpdates = controller.updater.automaticallyChecksForUpdates
+        reminders.onPendingUpdateChange = { [weak self] version in
+            self?.pendingUpdateVersion = version
+        }
         canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) {
             [weak self] updater, _ in
             Task { @MainActor [weak self] in
                 self?.canCheckForUpdates = updater.canCheckForUpdates
             }
+        }
+        if ProcessInfo.processInfo.environment["GAUGEZ_PREVIEW_DATA"] != "1" {
+            controller.startUpdater()
         }
     }
 
@@ -38,5 +50,35 @@ final class UpdateManager: ObservableObject {
 
     func checkForUpdates() {
         updaterController.checkForUpdates(nil)
+    }
+}
+
+/// Sparkle's gentle-reminder hooks for a menu bar app: a scheduled update is only shown as an
+/// alert when GaugeZ already has focus. Otherwise it is recorded so the menu can point at it.
+/// Sparkle calls these on the main thread.
+private final class GentleUpdateReminders: NSObject, SPUStandardUserDriverDelegate {
+    var onPendingUpdateChange: (@MainActor (String?) -> Void)?
+
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
+        immediateFocus
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+        guard !handleShowingUpdate else { return }
+        notify(update.displayVersionString)
+    }
+
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        notify(nil)
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        notify(nil)
+    }
+
+    private func notify(_ version: String?) {
+        MainActor.assumeIsolated { onPendingUpdateChange?(version) }
     }
 }

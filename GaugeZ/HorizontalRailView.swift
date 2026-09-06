@@ -17,7 +17,7 @@ struct HorizontalRailView: View {
     var body: some View {
         GeometryReader { geometry in
             let top = store.edgeSide == .top
-            let railLength = RailMetrics.shapeHeight(providerCount: store.visibleProviders.count)
+            let railLength = RailMetrics.shapeHeight(providerCount: store.railProviders.count)
             ZStack(alignment: top ? .top : .bottom) {
                 if state.isExpanded, let attachment = state.attachment {
                     ScrollView {
@@ -46,7 +46,7 @@ struct HorizontalRailView: View {
                 // Rotating the actual side rail keeps its shoulders, end hook, settings orb,
                 // drag grip, collapsed color chips, and materials identical across edges.
                 // Only the meter contents and gear icon rotate back to stay readable.
-                EdgeRailView(state: state, providers: store.visibleProviders, actions: actions,
+                EdgeRailView(state: state, providers: store.railProviders, actions: actions,
                              renderingEdge: top ? .right : .left, contentRotation: 90)
                     .frame(width: HorizontalRailMetrics.depth, height: railLength,
                            alignment: top ? .trailing : .leading)
@@ -69,7 +69,7 @@ struct HorizontalRailView: View {
     }
 
     private func pointerOffset(_ provider: ProviderID, railLength: CGFloat) -> CGFloat {
-        let index = store.visibleProviders.firstIndex(of: provider) ?? 0
+        let index = store.railProviders.firstIndex(of: provider) ?? 0
         let center = RailMetrics.rowCenterY(index: index)
         let maximum = (RailMetrics.attachmentWidth - RailMetrics.pointerDepth) / 2 - 28
         return max(-maximum, min(maximum, center - railLength / 2))

@@ -12,7 +12,7 @@ struct AttachedSettingsView: View {
             GaugeZWordmark(size: 17)
 
             VStack(spacing: 7) {
-                ForEach(ProviderID.allCases) { provider in
+                ForEach(store.providerOrder) { provider in
                     HStack(spacing: 10) {
                         ProviderLogo(provider: provider, size: 14)
                             .frame(width: 18)
