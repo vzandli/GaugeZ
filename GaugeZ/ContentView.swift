@@ -438,7 +438,14 @@ private struct AppearanceSettingsPage: View {
                         Text(problem).font(.caption).foregroundStyle(.orange).padding(12)
                     }
                     SettingsRowDivider()
-                    SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, and Grok Build session states from local metadata") {
+                    SettingsControlRow(title: "App presence", subtitle: store.appPresence.explanation) {
+                        Picker("App presence", selection: $store.appPresence) {
+                            ForEach(AppPresence.allCases) { presence in Text(presence.title).tag(presence) }
+                        }
+                        .labelsHidden().frame(width: 130)
+                    }
+                    SettingsRowDivider()
+                    SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local metadata. Codex and Antigravity states are inferred from recent writes.") {
                         Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
                     }
                     SettingsRowDivider()

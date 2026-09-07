@@ -1,19 +1,274 @@
 import Foundation
 
+/// Reads Codex rate limits from the app-server bundled with Codex, ChatGPT, or an installed
+/// `codex` CLI. When no executable can be found but the CLI has signed in to ChatGPT
+/// (`~/.codex/auth.json`), the same figures are read from the usage endpoint Codex itself calls,
+/// with the token Codex owns and refreshes. GaugeZ never writes that file or refreshes the token.
 actor CodexUsageProvider: UsageProviding {
+    private let session: URLSession
+    private let retryPolicy: ProviderRetryPolicy
+    private let locateExecutable: @Sendable () -> URL?
+    private let loadCredential: @Sendable () throws -> CodexWebCredential?
+
+    init(session: URLSession? = nil, retryPolicy: ProviderRetryPolicy? = nil,
+         locateExecutable: @escaping @Sendable () -> URL? = { CodexInstallation.locateExecutable() },
+         loadCredential: @escaping @Sendable () throws -> CodexWebCredential? = { try CodexWebCredential.load() }) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.waitsForConnectivity = false
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        self.session = session ?? URLSession(configuration: configuration)
+        self.retryPolicy = retryPolicy ?? ProviderRetryPolicy(provider: .codex)
+        self.locateExecutable = locateExecutable
+        self.loadCredential = loadCredential
+    }
+
     func fetchSnapshot() async throws -> UsageSnapshot {
-        let probe = CodexAppServerProbe()
-        return try await withTaskCancellationHandler {
-            try await Task.detached(priority: .utility) {
-                try probe.run()
-            }.value
-        } onCancel: {
-            probe.cancel()
+        try retryPolicy.check()
+        let snapshot: UsageSnapshot
+        if let executable = locateExecutable() {
+            snapshot = try await appServerSnapshot(executable: executable)
+        } else {
+            snapshot = try await webSnapshot()
+        }
+        retryPolicy.succeeded()
+        return snapshot
+    }
+
+    private func appServerSnapshot(executable: URL) async throws -> UsageSnapshot {
+        let probe = CodexAppServerProbe(executable: executable)
+        do {
+            return try await withTaskCancellationHandler {
+                try await Task.detached(priority: .utility) {
+                    try probe.run()
+                }.value
+            } onCancel: {
+                probe.cancel()
+            }
+        } catch CodexProviderError.server(let message) where CodexProviderError.looksThrottled(message) {
+            // The app-server relays ChatGPT's 429 as an error message with no Retry-After, so the
+            // wait is the policy's own floor, persisted like every other provider's.
+            throw retryPolicy.throttled(retryAfter: nil)
+        }
+    }
+
+    private func webSnapshot() async throws -> UsageSnapshot {
+        guard let credential = try loadCredential() else { throw CodexProviderError.notInstalled }
+        if let expiresAt = credential.expiresAt, expiresAt < .now { throw CodexProviderError.sessionExpired }
+
+        var request = URLRequest(url: CodexWebUsage.endpoint)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(credential.accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("GaugeZ/\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")", forHTTPHeaderField: "User-Agent")
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch {
+            throw CodexProviderError.offline(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw CodexProviderError.malformedResponse }
+        switch http.statusCode {
+        case 200..<300: break
+        case 401, 403: throw CodexProviderError.unauthorized
+        case 429: throw retryPolicy.throttled(response: http)
+        case 500...599: throw CodexProviderError.server("HTTP \(http.statusCode)")
+        default: throw CodexProviderError.unexpectedStatus(http.statusCode)
+        }
+
+        let windows = try CodexWebUsage.windows(from: data)
+        return UsageSnapshot(
+            provider: .codex,
+            accountID: credential.email,
+            planName: credential.planType.map { "ChatGPT \($0.capitalized)" },
+            windows: windows,
+            observedAt: .now,
+            source: "ChatGPT usage endpoint (Codex CLI sign-in)",
+            health: .live
+        )
+    }
+}
+
+// MARK: - Executable discovery
+
+enum CodexInstallation {
+    /// The app bundles first, then a `codex` on the user's PATH and in the places package managers
+    /// put it. A GUI app inherits a minimal PATH, so the usual install directories are listed
+    /// explicitly rather than trusted to be there.
+    static let applicationBundles = [
+        URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+        URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
+    ]
+
+    static func locateExecutable(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                                 environment: [String: String] = ProcessInfo.processInfo.environment,
+                                 applicationBundles: [URL] = applicationBundles) -> URL? {
+        var candidates = applicationBundles
+        candidates += searchDirectories(home: home, environment: environment)
+            .map { URL(fileURLWithPath: $0).appendingPathComponent("codex") }
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func searchDirectories(home: URL, environment: [String: String]) -> [String] {
+        var directories = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        directories += ["/opt/homebrew/bin", "/usr/local/bin"]
+        directories += [".npm-global/bin", ".local/bin", ".bun/bin", ".volta/bin", ".yarn/bin", ".cargo/bin"]
+            .map { home.appendingPathComponent($0).path }
+        // nvm keeps one bin directory per Node version; newest first.
+        let nvm = home.appendingPathComponent(".nvm/versions/node")
+        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvm.path) {
+            directories += versions.sorted(by: >).map { nvm.appendingPathComponent("\($0)/bin").path }
+        }
+        var seen = Set<String>()
+        return directories.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// An npm-installed `codex` is a launcher that needs `node` on the PATH of the process running
+    /// it, and a GUI app's PATH does not include where package managers put one.
+    static func environment(for executable: URL, base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var environment = base
+        let directories = [executable.deletingLastPathComponent().path, "/opt/homebrew/bin", "/usr/local/bin"]
+            + (base["PATH"] ?? "/usr/bin:/bin").split(separator: ":").map(String.init)
+        var seen = Set<String>()
+        environment["PATH"] = directories.filter { seen.insert($0).inserted }.joined(separator: ":")
+        return environment
+    }
+}
+
+// MARK: - CLI sign-in (HTTP fallback)
+
+/// Borrowed from `~/.codex/auth.json`, the CLI's own ChatGPT sign-in. Only read when no app-server
+/// executable exists; the token is used for one request and never persisted or logged.
+struct CodexWebCredential: Sendable {
+    let accessToken: String
+    let accountID: String
+    let expiresAt: Date?
+    let email: String?
+    let planType: String?
+
+    static func authURL(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                        environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let custom = environment["CODEX_HOME"], !custom.isEmpty {
+            return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath).appendingPathComponent("auth.json")
+        }
+        return home.appendingPathComponent(".codex/auth.json")
+    }
+
+    /// Nil when the CLI has never signed in (no file). A file without ChatGPT tokens, which is what
+    /// an API-key sign-in writes, has no usage limits to read and is reported as signed out.
+    static func load(url: URL = authURL()) throws -> CodexWebCredential? {
+        guard let attributes = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              attributes.isRegularFile == true, (attributes.fileSize ?? Int.max) < 1_048_576,
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try decode(data)
+    }
+
+    static func decode(_ data: Data) throws -> CodexWebCredential {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CodexProviderError.malformedCredential
+        }
+        guard let tokens = root["tokens"] as? [String: Any],
+              let token = headerSafe(tokens["access_token"]),
+              let account = headerSafe(tokens["account_id"]) else {
+            throw CodexProviderError.notSignedIn
+        }
+        var expiresAt: Date?
+        if let exp = (jwtClaims(token)?["exp"] as? NSNumber)?.doubleValue, exp.isFinite, exp > 0 {
+            expiresAt = Date(timeIntervalSince1970: exp)
+        }
+        let identity = (tokens["id_token"] as? String).flatMap(jwtClaims)
+        let auth = identity?["https://api.openai.com/auth"] as? [String: Any]
+        return CodexWebCredential(
+            accessToken: token,
+            accountID: account,
+            expiresAt: expiresAt,
+            email: identity?["email"] as? String,
+            planType: auth?["chatgpt_plan_type"] as? String
+        )
+    }
+
+    /// Claims supply identity labels and a local expiry hint only; the server validates the token.
+    static func jwtClaims(_ token: String) -> [String: Any]? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func headerSafe(_ value: Any?) -> String? {
+        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
+              text.rangeOfCharacter(from: .newlines) == nil, text.rangeOfCharacter(from: .controlCharacters) == nil
+        else { return nil }
+        return text
+    }
+}
+
+/// `GET https://chatgpt.com/backend-api/wham/usage`: the account's main windows only.
+/// `additional_rate_limits` and `code_review_rate_limit` meter something else and are left out.
+enum CodexWebUsage {
+    static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+
+    static func windows(from data: Data, now: Date = .now) throws -> [UsageWindow] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CodexProviderError.malformedResponse
+        }
+        guard let limit = object["rate_limit"] as? [String: Any] else { throw CodexProviderError.noUsageWindows }
+        var windows: [UsageWindow] = []
+        for (id, fallback) in [("primary", "Current limit"), ("secondary", "Weekly limit")] {
+            guard let window = limit["\(id)_window"] as? [String: Any] else { continue }
+            guard let percent = (window["used_percent"] as? NSNumber)?.doubleValue, percent.isFinite else {
+                throw CodexProviderError.malformedResponse
+            }
+            let seconds = (window["limit_window_seconds"] as? NSNumber)?.doubleValue
+            let minutes = seconds.flatMap { $0.isFinite && $0 > 0 ? Int(($0 / 60).rounded()) : nil }
+            var resetsAt: Date?
+            if let epoch = (window["reset_at"] as? NSNumber)?.doubleValue, epoch.isFinite, epoch > 0 {
+                resetsAt = Date(timeIntervalSince1970: epoch)
+            } else if let after = (window["reset_after_seconds"] as? NSNumber)?.doubleValue, after.isFinite, after >= 0 {
+                resetsAt = now.addingTimeInterval(after)
+            }
+            windows.append(UsageWindow(
+                id: id,
+                label: CodexWindowLabel.label(minutes: minutes, fallback: fallback),
+                usedPercent: Int(max(0, min(100, percent)).rounded()),
+                resetsAt: resetsAt,
+                durationMinutes: minutes
+            ))
+        }
+        guard !windows.isEmpty else { throw CodexProviderError.noUsageWindows }
+        return windows
+    }
+}
+
+/// Labels derive from the length Codex actually sent: a free plan reports a 30-day primary
+/// window, not the 5-hour one a paid plan does, and an unrecognised length must not drop it.
+enum CodexWindowLabel {
+    static func label(minutes: Int?, fallback: String) -> String {
+        guard let minutes, minutes > 0 else { return fallback }
+        switch minutes {
+        case 300: return "5-hour limit"
+        case 10_080: return "Weekly limit"
+        case let value where value % 1_440 == 0: return "\(value / 1_440)-day limit"
+        case let value where value % 60 == 0: return "\(value / 60)-hour limit"
+        default: return "\(minutes)-minute limit"
         }
     }
 }
 
+// MARK: - App-server probe
+
 private final class CodexAppServerProbe: @unchecked Sendable {
+    private let executable: URL
     private let process = Process()
     private let inputPipe = Pipe()
     private let outputPipe = Pipe()
@@ -26,12 +281,16 @@ private final class CodexAppServerProbe: @unchecked Sendable {
     private var result: Result<UsageSnapshot, Error>?
     private var stderr = Data()
 
+    init(executable: URL) {
+        self.executable = executable
+    }
+
     func cancel() { finish(.failure(CancellationError())) }
 
     func run() throws -> UsageSnapshot {
-        let executable = try locateExecutable()
         process.executableURL = executable
         process.arguments = ["app-server", "--stdio"]
+        process.environment = CodexInstallation.environment(for: executable)
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
@@ -72,17 +331,6 @@ private final class CodexAppServerProbe: @unchecked Sendable {
 
         cleanup()
         return try (result ?? .failure(CodexProviderError.noResponse)).get()
-    }
-
-    private func locateExecutable() throws -> URL {
-        let candidates = [
-            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
-            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
-        ]
-        if let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {
-            return executable
-        }
-        throw CodexProviderError.notInstalled
     }
 
     private func receive(_ data: Data) {
@@ -244,52 +492,70 @@ private struct RateLimitWindow: Decodable {
         guard windowDurationMins.map({ $0 > 0 }) ?? true else {
             throw CodexProviderError.malformedResponse
         }
-        let label = windowDurationMins == nil ? fallbackLabel : durationLabel
         return UsageWindow(
             id: id,
-            label: label,
+            label: CodexWindowLabel.label(minutes: windowDurationMins, fallback: fallbackLabel),
             usedPercent: max(0, min(100, usedPercent)),
             resetsAt: resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             durationMinutes: windowDurationMins
         )
     }
-
-    private var durationLabel: String {
-        guard let minutes = windowDurationMins else { return "Current limit" }
-        switch minutes {
-        case 300: return "5-hour limit"
-        case 10_080: return "Weekly limit"
-        case let value where value % 1_440 == 0: return "\(value / 1_440)-day limit"
-        case let value where value % 60 == 0: return "\(value / 60)-hour limit"
-        default: return "\(minutes)-minute limit"
-        }
-    }
 }
 
-private enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
+// MARK: - Errors
+
+enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
     case notInstalled
+    case notSignedIn
+    case malformedCredential
+    case sessionExpired
+    case unauthorized
+    case offline(String)
+    case unexpectedStatus(Int)
     case timedOut
     case noResponse
     case malformedResponse
     case noUsageWindows
     case server(String)
 
+    /// The app-server relays ChatGPT's throttling as text; these are the forms seen.
+    static func looksThrottled(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        return lowered.contains("429") || lowered.contains("rate limit") || lowered.contains("too many requests")
+    }
+
+    private static func looksUnauthorized(_ message: String) -> Bool {
+        message.contains("401") || message.contains("token") || message.contains("auth")
+    }
+
     var errorDescription: String? {
         switch self {
-        case .notInstalled: 
-            return "ChatGPT/Codex is not installed."
-        case .timedOut: 
+        case .notInstalled:
+            return "Codex is not installed. Install the Codex app, ChatGPT, or the codex CLI and sign in."
+        case .notSignedIn:
+            return "The Codex CLI is not signed in to ChatGPT. Run `codex login`, or install the Codex app."
+        case .malformedCredential:
+            return "The Codex CLI sign-in has an unsupported format."
+        case .sessionExpired:
+            return "The Codex CLI sign-in has expired. Run `codex` once so it refreshes, then retry."
+        case .unauthorized:
+            return "ChatGPT rejected the Codex sign-in. Sign in to Codex again."
+        case .offline(let detail):
+            return "ChatGPT could not be reached: \(detail)"
+        case .unexpectedStatus(let status):
+            return "ChatGPT returned an unexpected response (\(status))."
+        case .timedOut:
             return "Codex did not answer within 12 seconds."
-        case .noResponse: 
+        case .noResponse:
             return "Codex returned no response."
-        case .malformedResponse: 
+        case .malformedResponse:
             return "Codex returned an unsupported response."
-        case .noUsageWindows: 
+        case .noUsageWindows:
             return "Codex reported no usage windows."
         case .server(let message):
             if message.contains("404") || message.contains("wham/usage") {
                 return "ChatGPT rate limits are temporarily unavailable."
-            } else if message.contains("401") || message.contains("token") || message.contains("auth") {
+            } else if Self.looksUnauthorized(message) {
                 return "ChatGPT session expired. Sign in inside ChatGPT to refresh."
             }
             return "Codex app-server could not provide usage. Open Codex and retry."
@@ -299,9 +565,11 @@ private enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
     var providerHealth: ProviderHealth {
         let text = errorDescription ?? "Codex error"
         switch self {
-        case .server(let message) where message.contains("401") || message.contains("token") || message.contains("auth"):
+        case .server(let message) where Self.looksUnauthorized(message):
             return .signedOut(text)
-        case .server, .timedOut, .noResponse:
+        case .notSignedIn, .unauthorized:
+            return .signedOut(text)
+        case .server, .timedOut, .noResponse, .sessionExpired, .offline:
             return .stale(text)
         default:
             return .unavailable(text)

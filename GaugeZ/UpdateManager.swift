@@ -20,6 +20,12 @@ final class UpdateManager: ObservableObject {
     /// bar instead of an alert nobody sees; choosing Check for Updates shows it immediately.
     @Published private(set) var pendingUpdateVersion: String?
 
+    /// Without a menu bar item there is nowhere quiet to announce an update, so Sparkle's own
+    /// alert is allowed through instead.
+    var hasMenuBarPresence = true {
+        didSet { reminders.hasMenuBarPresence = hasMenuBarPresence }
+    }
+
     init() {
         let controller = SPUStandardUpdaterController(
             startingUpdater: false,
@@ -58,11 +64,12 @@ final class UpdateManager: ObservableObject {
 /// Sparkle calls these on the main thread.
 private final class GentleUpdateReminders: NSObject, SPUStandardUserDriverDelegate {
     var onPendingUpdateChange: (@MainActor (String?) -> Void)?
+    var hasMenuBarPresence = true
 
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
     func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
-        immediateFocus
+        immediateFocus || !hasMenuBarPresence
     }
 
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {

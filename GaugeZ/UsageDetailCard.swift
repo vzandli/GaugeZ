@@ -146,21 +146,32 @@ struct UsageDetailCard: View {
             }
 
             if store.activityEnabled, snapshot.provider.supportsActivity {
+                let sessions = store.activity(for: snapshot.provider)
+                let cap = SessionListCap.count(visibleHeight: Self.displayHeight(for: store))
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(snapshot.provider.kind == .cursor ? "CURSOR SESSIONS" : (snapshot.provider.kind == .grok ? "GROK BUILD SESSIONS" : "CLAUDE CODE SESSIONS")).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    let sessions = store.activity(for: snapshot.provider)
+                    Text(Self.sessionsTitle(for: snapshot.provider)).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     if sessions.isEmpty {
-                        Text("No verifiable session activity available.").font(.caption2).foregroundStyle(.secondary)
+                        Text(snapshot.provider.activityIsInferred
+                             ? "No recent writes from \(snapshot.provider.displayName)."
+                             : "No verifiable session activity available.")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
-                    ForEach(sessions) { session in
+                    // Waiting first, then working, so what the cap hides is what matters least.
+                    ForEach(sessions.prefix(cap)) { session in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(session.name).font(.caption.weight(.medium))
-                            Text("\(session.state.rawValue) · \(session.project)")
-                                .foregroundStyle(session.state == .waiting ? .orange : .secondary)
+                            TimelineView(.periodic(from: .now, by: 30)) { context in
+                                Text(Self.sessionLine(session, now: context.date))
+                            }
+                            .foregroundStyle(session.state == .waiting ? .orange : .secondary)
                             if session.state == .waiting, let reason = session.waitingReason { Text(reason) }
                         }
                         .font(.caption2)
                         .accessibilityElement(children: .combine)
+                    }
+                    if sessions.count > cap {
+                        Text("and \(sessions.count - cap) more")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 .padding(.vertical, 4)
@@ -228,6 +239,27 @@ struct UsageDetailCard: View {
         snapshot.planName
     }
 
+    private static func sessionsTitle(for provider: ProviderID) -> String {
+        switch provider.kind {
+        case .claude: "CLAUDE CODE SESSIONS"
+        default: "\(provider.displayName.uppercased()) SESSIONS"
+        }
+    }
+
+    /// "Working · GaugeZ · 6 min", with inferred states marked as such.
+    static func sessionLine(_ session: ActivitySession, now: Date) -> String {
+        var parts = [session.isInferred ? "\(session.state.rawValue) (inferred)" : session.state.rawValue, session.project]
+        if let since = session.since, session.state != .unknown {
+            parts.append(ElapsedCopy.text(since: since, now: now))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func displayHeight(for store: UsageStore) -> CGFloat {
+        let screen = NSScreen.screens.first { DisplayChoice.identifier(for: $0) == store.selectedDisplayID } ?? NSScreen.main
+        return screen?.visibleFrame.height ?? 800
+    }
+
     private static func age(of date: Date, at now: Date) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
         if seconds < 60 { return "just now" }
@@ -239,10 +271,7 @@ struct UsageDetailCard: View {
     }
 
     private static func absoluteReset(_ date: Date) -> String {
-        if abs(date.timeIntervalSinceNow) < 20 * 60 * 60 {
-            return date.formatted(date: .omitted, time: .shortened)
-        }
-        return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        ResetCopy.absolute(date)
     }
 
     private static func relativeReset(_ date: Date) -> String {

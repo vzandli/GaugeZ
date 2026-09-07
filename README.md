@@ -7,7 +7,7 @@
 **Your AI subscription limits, one glance away.**
 
 A native macOS edge rail that shows how much of your Claude, Codex, Cursor, Antigravity, GLM,
-and Grok Build quota is left, on any screen edge.
+Grok Build, and OpenCode quota is left, on any screen edge.
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)](#building-from-source)
@@ -50,16 +50,26 @@ expand it, glance at the rings, and get back to work.
   with separate rings, session lists, settings, cached readings, and retry deadlines.
   The default Claude ring keeps its Desktop/CLI source choice. Extra profiles always read
   their own Claude Code sign-in. Enable newly added profiles in Settings after upgrading.
-- **Session activity.** Opt in to Claude Code, Cursor, and Grok Build activity from local
-  metadata. Cards show session names, projects, and waiting reasons. Claude and Grok Build
-  records require a verifiable running process; Cursor working states require a running
-  editor and a write within 15 minutes, after its current launch when the launch time is
-  available.
+- **Session activity.** Opt in to Claude Code, Cursor, Grok Build, Codex, and Antigravity
+  activity from local metadata. Cards show session names, projects, waiting reasons, and how
+  long each session has been in its state. Claude and Grok Build records require a verifiable
+  running process, and a Grok Build session reads as working only while its update log was
+  written within the last 45 seconds; Cursor working states require a running editor and a
+  write within 15 minutes, after its current launch when the launch time is available. Codex
+  and Antigravity publish no status, so their working state is inferred from a write to their
+  local logs within the last few seconds and labeled as inferred. Long session lists are capped
+  to what the display can hold, with "and N more" for the rest.
 - **Accounts that fit.** When enabled accounts exceed the display's available space,
   a page control in the drag handle lets you cycle through them on any edge.
 - **Make it yours.** Reorder providers, choose a persistent display, position the rail on
   any of its four edges, and enable launch at login. All edges share the same curved rail,
-  settings orb, colored collapsed tab, and drag handle; horizontal text stays upright.
+  settings orb, colored collapsed tab, and drag handle; horizontal text stays upright. Choose
+  whether GaugeZ shows a Dock icon, a menu bar icon, or neither; relaunching it from
+  Applications always brings Settings back.
+- **Joins a MacBook's notch.** On the top edge of a display with a hardware notch, the rail
+  centers under the notch and shows nothing at rest. Reaching the notch with the pointer opens
+  it, and the rail hangs beneath the menu bar rather than covering it.
+- **What's new.** The first launch after an update shows what changed in that version.
 - **Keyboard access.** Choose **Usage…** in the menu bar for a regular, focusable usage
   window. Surfaces respect Reduce Transparency and Increase Contrast.
 - **Diagnostics.** See each reading’s source, observation time, and next retry. Retry a
@@ -72,11 +82,12 @@ expand it, glance at the rings, and get back to work.
 | Provider | Where the numbers come from |
 | --- | --- |
 | **Claude** | The usage log kept by the Claude desktop app, or the Claude Code sign-in stored in your Keychain. |
-| **Codex** | The app-server bundled with Codex (or ChatGPT), over a local process. |
+| **Codex** | The app-server bundled with Codex, ChatGPT, or an installed `codex` CLI, over a local process. Without one, the CLI's ChatGPT sign-in in `~/.codex/auth.json` is used to read the same usage endpoint Codex calls. |
 | **Cursor** | Cursor's local sign-in, used to ask cursor.com for your plan usage. |
 | **Antigravity** | The language server of a running Antigravity app or IDE, asked for its model quotas. |
 | **GLM** | Z.ai Coding Plan usage, using a readable key held by Claude Code, ZCode, or OpenCode; supports global and China consoles. |
 | **Grok Build** | The xAI account sign-in in `~/.grok/auth.json`, asked via its billing service for allowance and on-demand spend. |
+| **OpenCode** | The Go plan's official usage endpoint, with the `opencode-go` key OpenCode stores in `~/.local/share/opencode/auth.json` on sign-in. |
 
 Each provider and Claude profile can be switched off independently in Settings, and a
 failure in one never affects the others. New providers and profiles start disabled for
@@ -97,8 +108,9 @@ GaugeZ is a local companion app.
   Duplicate Keychain entries are resolved by modification time, within the selected profile.
   A denied secret read is not repeated by automatic polling while that item is unchanged.
 - Optional activity monitoring reads Claude Code session metadata, Cursor composer
-  headers, and Grok Build's active-session list and session titles locally without
-  persisting them. It does not read conversation transcripts. The Grok Build card also
+  headers, Grok Build's active-session list and session titles, Codex's thread catalogue
+  and rollout timestamps, and Antigravity transcript timestamps locally without persisting
+  them. It does not read conversation transcripts or rollout contents. The Grok Build card also
   reads the token and cost totals from the latest session's local update log.
 - Open Grok Build starts the installed `grok` CLI in Terminal, which asks for Automation
   permission the first time. Nothing else launches or scripts other apps.
@@ -166,6 +178,9 @@ GaugeZ/
 ├── AttachedSettingsView.swift  Compact rail settings
 ├── RailSurfaces.swift          Glass and accessible surface rendering
 ├── UsageOverviewView.swift     Keyboard-accessible usage window
+├── WhatsNewView.swift          Once-per-version release notes window
+├── ReleaseNotes.swift          The notes it shows, checked against MARKETING_VERSION by the tests
+├── AppPresence.swift           Dock, menu bar, or neither
 ├── ActivityReader.swift        Opt-in Claude Code, Cursor, and Grok Build session metadata
 ├── ProviderRetryPolicy.swift   Persistent per-provider rate-limit backoff
 ├── ContentView.swift           Settings: Providers, Appearance, Diagnostics, Updates
@@ -189,8 +204,8 @@ guessed number when the upstream format changes.
 
 ## Thanks
 
-GLM credential discovery includes code adapted from Codenotch (MIT); see
-[Third-party notices](GaugeZ/ThirdPartyNotices.txt).
+GLM credential discovery and the OpenCode adapter include code adapted from Codenotch (MIT);
+see [Third-party notices](GaugeZ/ThirdPartyNotices.txt).
 
 Design inspiration for the edge rail came from [@hivinz_](https://x.com/hivinz_). Thank you.
 
@@ -202,10 +217,11 @@ otherwise. Claude and Grok Build are polled at most every five minutes because t
 endpoints rate-limit faster polling. With the desktop app as Claude source, its local usage
 log is used while it is under five minutes old and the endpoint otherwise, since the desktop
 app only samples about every 15 minutes and does not see Claude Code or web usage until its
-next sample. GaugeZ also refreshes after wake and network recovery. Claude, Cursor, GLM, and
+next sample. GaugeZ also refreshes after wake and network recovery. Claude, Cursor, Codex, GLM, and
 Grok Build retry penalties survive relaunches, increase after repeated throttling, and honor
-server retry deadlines up to 15 minutes; the last good reading stays on screen during a
-backoff. Forgetting a reading, disabling a provider, or switching the Claude source clears
+server retry deadlines up to 15 minutes. The last good reading stays
+on screen during a backoff, during a Keychain refusal, and through the brief window after waking
+from sleep when the Keychain cannot answer yet. Forgetting a reading, disabling a provider, or switching the Claude source clears
 its penalty. Passing a reset time marks an old reading stale until the provider confirms its
 new value.
 

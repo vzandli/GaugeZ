@@ -19,6 +19,10 @@ final class UsageStore: ObservableObject {
     @Published var edgeSide: EdgeSide {
         didSet { UserDefaults.standard.set(edgeSide.rawValue, forKey: Keys.edgeSide) }
     }
+    /// Dock tile, menu bar item, or neither. The app delegate applies it.
+    @Published var appPresence: AppPresence {
+        didSet { UserDefaults.standard.set(appPresence.rawValue, forKey: Keys.appPresence) }
+    }
     /// Liquid Glass surfaces instead of solid black.
     @Published var glassEnabled: Bool {
         didSet { UserDefaults.standard.set(glassEnabled, forKey: Keys.glassEnabled) }
@@ -131,6 +135,12 @@ final class UsageStore: ObservableObject {
                     let launchedAt = app.map { $0.launchDate ?? .distantPast }
                     found += await reader.readCursorSessions(launchedAt: launchedAt)
                 }
+                if enabled.contains(.codex) {
+                    found += await reader.readCodexSessions()
+                }
+                if enabled.contains(.antigravity) {
+                    found += await reader.readAntigravitySessions()
+                }
                 if enabled.contains(.grok) {
                     found += await reader.readGrokSessions()
                 }
@@ -221,7 +231,8 @@ final class UsageStore: ObservableObject {
             enabledProviders = Set(available)
         }
         providers = [.codex: CodexUsageProvider(), .cursor: CursorUsageProvider(),
-                     .antigravity: AntigravityUsageProvider(), .glm: GLMUsageProvider(), .grok: GrokUsageProvider()]
+                     .antigravity: AntigravityUsageProvider(), .glm: GLMUsageProvider(), .grok: GrokUsageProvider(),
+                     .opencode: OpenCodeUsageProvider()]
         for profile in profiles {
             providers[profile.provider] = ClaudeUsageProvider(profile: profile, selectedSource: {
                 ClaudeSource(rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? "") ?? .desktop
@@ -234,6 +245,9 @@ final class UsageStore: ObservableObject {
         edgeSide = EdgeSide(
             rawValue: UserDefaults.standard.string(forKey: Keys.edgeSide) ?? ""
         ) ?? .right
+        appPresence = AppPresence(
+            rawValue: UserDefaults.standard.string(forKey: Keys.appPresence) ?? ""
+        ) ?? .menuBar
         claudeSource = ClaudeSource(
             rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? ""
         ) ?? .desktop
@@ -257,9 +271,12 @@ final class UsageStore: ObservableObject {
             displayMode = .hover
             activityEnabled = true
             sessions = [ActivitySession(id: "preview", provider: .claude, name: "GaugeZ", project: "GaugeZ",
-                                        state: .waiting, waitingReason: "Review the proposed changes"),
+                                        state: .waiting, waitingReason: "Review the proposed changes",
+                                        since: Date().addingTimeInterval(-6 * 60)),
                         ActivitySession(id: "preview-cursor", provider: .cursor, name: "Build usage dashboard", project: "GaugeZ",
-                                        state: .working, waitingReason: nil)]
+                                        state: .working, waitingReason: nil, since: Date().addingTimeInterval(-90)),
+                        ActivitySession(id: "preview-codex", provider: .codex, name: "Codex", project: "Codex",
+                                        state: .working, waitingReason: nil, since: Date(), isInferred: true)]
             snapshots = Dictionary(uniqueKeysWithValues: available.enumerated().map { index, provider in
                 (provider, UsageSnapshot(provider: provider, accountID: nil, planName: "Preview plan",
                     windows: [
@@ -453,9 +470,10 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// Keeps the last valid values when the provider is merely unreachable (stale or unavailable),
-    /// and clears them when the sign-in itself is the problem, so a signed-out or blocked provider
-    /// never looks like a reading.
+    /// Keeps the last valid values when the provider is merely unreachable (stale or unavailable)
+    /// or when a Keychain read was refused (the account has not changed, only our access to it),
+    /// and clears them when the sign-in itself is the problem, so a signed-out provider never
+    /// looks like a reading.
     private static func failedSnapshot(
         for provider: ProviderID,
         previous: UsageSnapshot,
@@ -477,7 +495,7 @@ final class UsageStore: ObservableObject {
         }
 
         switch health {
-        case .stale, .unavailable:
+        case .stale, .unavailable, .permissionRequired:
             if !previous.windows.isEmpty {
                 return previous.withHealth(health)
             }
@@ -575,6 +593,7 @@ final class UsageStore: ObservableObject {
         static let enabledProviders = "enabledProviders"
         static let displayMode = "displayMode"
         static let edgeSide = "edgeSide"
+        static let appPresence = "appPresence"
         static let claudeSource = "claudeSource"
         static let glassEnabled = "glassEnabled"
         static let glassOpacity = "glassOpacity"

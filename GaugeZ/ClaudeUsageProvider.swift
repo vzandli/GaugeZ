@@ -61,11 +61,25 @@ actor ClaudeUsageProvider: UsageProviding {
 
     private func fetchViaClaudeCode() async throws -> UsageSnapshot {
         if let loadCredentials { return try await fetchViaCredential(loadCredentials()) }
+        let credential = try loadClaudeCodeCredential()
+        do {
+            return try await fetchViaCredential(credential)
+        } catch ClaudeProviderError.unauthorized {
+            // A rejected but unexpired token usually means Claude Code has since signed into a
+            // different account. Drop the cached copy and re-read once; an unchanged token is a
+            // genuine rejection and is reported as such.
+            credentialCache.forget()
+            let fresh = try loadClaudeCodeCredential()
+            guard fresh.accessToken != credential.accessToken else { throw ClaudeProviderError.unauthorized }
+            return try await fetchViaCredential(fresh)
+        }
+    }
+
+    private func loadClaudeCodeCredential() throws -> ClaudeCredential {
         let match = try ClaudeKeychain.newest(service: profile.keychainService)
-        let credential = try credentialCache.value(stamp: match) {
+        return try credentialCache.value(stamp: match) {
             try ClaudeCredentialReader.load(profile: profile, match: match)
         }
-        return try await fetchViaCredential(credential)
     }
 
     private func fetchViaClaudeDesktop() async throws -> UsageSnapshot {
@@ -260,6 +274,9 @@ enum ClaudeDesktopCredentialReader {
                 continue
             case .failure(.denied(let status)):
                 sawPermissionProblem = status
+            case .failure(.other(let status)) where status == ClaudeKeychain.darkWakeStatus:
+                // Just woken from sleep: the Keychain cannot answer yet. Not a refusal.
+                throw ClaudeProviderError.keychainUnavailable(status)
             case .failure(.other(let status)):
                 sawPermissionProblem = sawPermissionProblem ?? status
             }
@@ -423,15 +440,33 @@ enum ClaudeDesktopCredentialReader {
 enum ClaudeUsageParser {
     /// Every top-level object carrying a numeric `utilization` becomes a window, so windows that
     /// Claude adds later (model-specific weekly limits, for example) still show up with a
-    /// readable label instead of being dropped.
+    /// readable label instead of being dropped. The newer `limits` array is read as well and
+    /// merged by id: a window that has just rolled over disappears from the array while the named
+    /// object still carries it, so neither shape is trusted alone.
     static func windows(from data: Data) throws -> [UsageWindow] {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ClaudeProviderError.malformedResponse
         }
 
         var windows: [(order: Int, window: UsageWindow)] = []
+        for entry in (object["limits"] as? [[String: Any]]) ?? [] {
+            guard let kind = entry["kind"] as? String, !kind.isEmpty,
+                  let percent = ((entry["percent"] ?? entry["utilization"]) as? NSNumber)?.doubleValue
+            else { continue }
+            guard percent.isFinite, percent >= 0, percent <= 100.5 else {
+                throw ClaudeProviderError.invalidUtilization(kind)
+            }
+            let key = canonicalKey(forKind: kind)
+            guard !windows.contains(where: { $0.window.id == key }) else { continue }
+            let resetsAt = ((entry["resets_at"] ?? entry["resetsAt"]) as? String).flatMap(parseDate)
+            let descriptor = describe(key: key)
+            windows.append((descriptor.order, UsageWindow(
+                id: key, label: descriptor.label, usedPercent: Int(percent.rounded()),
+                resetsAt: resetsAt, durationMinutes: descriptor.durationMinutes)))
+        }
         for (key, value) in object {
             guard let bucket = value as? [String: Any] else { continue }
+            guard !windows.contains(where: { $0.window.id == key }) else { continue }
 
             if key == "extra_usage" {
                 guard (bucket["is_enabled"] as? Bool) == true else { continue }
@@ -460,6 +495,18 @@ enum ClaudeUsageParser {
                 lhs.order == rhs.order ? lhs.window.id < rhs.window.id : lhs.order < rhs.order
             }
             .map(\.window)
+    }
+
+    /// The `limits` array names windows by kind (`session`, `weekly_all`, `weekly_opus`); the named
+    /// objects use `five_hour`/`seven_day*`. One id per window keeps the two shapes from doubling up
+    /// and keeps existing headline-window preferences valid.
+    static func canonicalKey(forKind kind: String) -> String {
+        switch kind {
+        case "session", "five_hour": return "five_hour"
+        case "weekly_all", "seven_day": return "seven_day"
+        case let value where value.hasPrefix("weekly_"): return "seven_day_" + value.dropFirst("weekly_".count)
+        default: return kind
+        }
     }
 
     private static func describe(key: String) -> (label: String, order: Int, durationMinutes: Int?) {
@@ -496,6 +543,7 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
     case notSignedIn
     case profileNotSignedIn(String)
     case keychainDenied(OSStatus)
+    case keychainUnavailable(OSStatus)
     case malformedCredential
     case tokenExpired
     case unauthorized
@@ -520,6 +568,8 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
             guidance
         case .keychainDenied:
             "GaugeZ needs permission to read the Claude Code sign-in from your Keychain."
+        case .keychainUnavailable:
+            "The Keychain is not available right now (for example just after waking). GaugeZ will retry."
         case .malformedCredential:
             "The Claude Code sign-in has an unsupported format."
         case .tokenExpired:
@@ -552,7 +602,7 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
             return .signedOut(message)
         case .keychainDenied:
             return .permissionRequired(message)
-        case .tokenExpired, .rateLimited, .offline, .server:
+        case .tokenExpired, .rateLimited, .offline, .server, .keychainUnavailable:
             return .stale(message)
         case .forbidden, .malformedCredential, .unexpectedStatus, .malformedResponse,
              .invalidUtilization, .noUsageWindows, .desktopLogMalformed:

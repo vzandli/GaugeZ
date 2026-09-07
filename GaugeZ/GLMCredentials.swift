@@ -112,9 +112,15 @@ enum GLMCredentials {
             // Explicitly disabled entries are not keys being used; claiming
             // one would read an account the user switched off.
             if let enabled = provider["enabled"] as? Bool, !enabled { continue }
-            guard let base = string(options["baseURL"]), let host = URL(string: base)?.host,
-                  isZaiHost(host) else { continue }
-            let console = consoleBase(from: host)
+            // A plan entry without a base URL is ZCode's default, the global console. One that
+            // names a non-Z.ai host is somebody else's key under a coding-plan name and is skipped.
+            let console: URL
+            if let base = string(options["baseURL"]) {
+                guard let host = URL(string: base)?.host, isZaiHost(host) else { continue }
+                console = consoleBase(from: host)
+            } else {
+                console = URL(string: "https://api.z.ai")!
+            }
             return Credential(token: key, baseURL: console, source: "ZCode")
         }
         return nil

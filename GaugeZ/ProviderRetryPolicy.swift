@@ -42,21 +42,32 @@ struct ProviderRetryPolicy {
     static let maximumDelay: TimeInterval = 900
 
     func throttled(response: HTTPURLResponse) -> ProviderRetryError {
-        let attempt = min(10, max(0, defaults.integer(forKey: prefix + ".attempts")))
-        let floor = min(Self.maximumDelay, 60 * pow(2, Double(attempt)))
-        var delay = floor
+        var retryAfter: TimeInterval?
         if let raw = response.value(forHTTPHeaderField: "Retry-After") {
             if let seconds = TimeInterval(raw), seconds.isFinite {
-                delay = max(floor, min(Self.maximumDelay, seconds))
+                retryAfter = seconds
             } else {
                 let formatter = DateFormatter()
                 formatter.locale = Locale(identifier: "en_US_POSIX")
                 formatter.timeZone = TimeZone(secondsFromGMT: 0)
                 formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
                 if let date = formatter.date(from: raw) {
-                    delay = max(floor, min(Self.maximumDelay, date.timeIntervalSince(now())))
+                    retryAfter = date.timeIntervalSince(now())
                 }
             }
+        }
+        return throttled(retryAfter: retryAfter)
+    }
+
+    /// For sources that report throttling without an HTTP response (a local app-server relaying a
+    /// 429, or an error envelope inside a 200): the same exponential floor, optionally raised by
+    /// a server-supplied wait.
+    func throttled(retryAfter: TimeInterval?) -> ProviderRetryError {
+        let attempt = min(10, max(0, defaults.integer(forKey: prefix + ".attempts")))
+        let floor = min(Self.maximumDelay, 60 * pow(2, Double(attempt)))
+        var delay = floor
+        if let retryAfter, retryAfter.isFinite {
+            delay = max(floor, min(Self.maximumDelay, retryAfter))
         }
         let until = now().addingTimeInterval(delay)
         defaults.set(until, forKey: prefix + ".until")

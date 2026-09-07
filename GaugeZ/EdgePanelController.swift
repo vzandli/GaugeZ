@@ -20,6 +20,9 @@ final class EdgePanelController {
     /// Pointer position when the window moved away from under it; see `routePointer`.
     private var pendingCollapseOrigin: NSPoint?
     private var isDragging = false
+    /// The usable area the rail was last placed against; see `followUsableAreaIfItMoved`.
+    private var lastUsableArea: NSRect = .zero
+    private var usableAreaTimer: Timer?
     private var dragStartScreenY: CGFloat = 0
     private var dragStartVerticalPosition: Double = 0.5
     private var lastSnapHaptic = false
@@ -52,6 +55,7 @@ final class EdgePanelController {
         installContent()
         observeSettings()
         installPointerMonitors()
+        installUsableAreaWatch()
         applyDisplayMode(animated: false)
         runDemoIfRequested()
     }
@@ -60,6 +64,24 @@ final class EdgePanelController {
         for monitor in pointerMonitors {
             NSEvent.removeMonitor(monitor)
         }
+        usableAreaTimer?.invalidate()
+    }
+
+    /// An auto-hiding Dock revealing or concealing itself, or moving to another edge, changes the
+    /// usable screen area without posting `didChangeScreenParametersNotification`. Nothing tells the
+    /// rail, so it asks: the visible frame is compared on a timer and on pointer movement.
+    private func installUsableAreaWatch() {
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followUsableAreaIfItMoved() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        usableAreaTimer = timer
+    }
+
+    private func followUsableAreaIfItMoved() {
+        guard !isDragging, let frame = preferredScreen?.visibleFrame, frame != lastUsableArea else { return }
+        debugNote("usable area moved to \(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))")
+        positionPanel(animated: false)
     }
 
     // MARK: - Pointer routing
@@ -84,6 +106,7 @@ final class EdgePanelController {
     }
 
     private func routePointer() {
+        followUsableAreaIfItMoved()
         if isDragging {
             if panel.ignoresMouseEvents {
                 panel.ignoresMouseEvents = false
@@ -112,17 +135,25 @@ final class EdgePanelController {
     private var interactiveRects: [NSRect] {
         let frame = panel.frame
         if store.edgeSide.isHorizontal {
+            let top = store.edgeSide == .top
+            let inset = top ? state.topInset : 0
+            let contentTop = frame.maxY - inset
             let railHeight = state.isExpanded ? HorizontalRailMetrics.depth : RailMetrics.collapsedWidth
             let railWidth = RailMetrics.shapeHeight(providerCount: store.railProviders.count)
             let rail = NSRect(x: frame.midX - railWidth / 2,
-                              y: store.edgeSide == .top ? frame.maxY - railHeight : frame.minY,
+                              y: top ? contentTop - railHeight : frame.minY,
                               width: railWidth, height: railHeight)
             var rects = [rail]
+            if top, let notch = state.joinedNotch {
+                // The hardware notch is the tab while the rail rests; hovering it opens the rail.
+                rects.append(NSRect(x: frame.midX - notch.width / 2, y: frame.maxY - notch.height,
+                                    width: notch.width, height: notch.height))
+            }
             if state.isExpanded, state.attachment != nil {
                 let width = RailMetrics.attachmentWidth - RailMetrics.pointerDepth
-                let height = min(state.attachmentHeight + HorizontalRailMetrics.cardGap, max(0, frame.height - HorizontalRailMetrics.depth))
+                let height = min(state.attachmentHeight + HorizontalRailMetrics.cardGap, max(0, frame.height - inset - HorizontalRailMetrics.depth))
                 rects.append(NSRect(x: frame.midX - width / 2,
-                                    y: store.edgeSide == .top ? frame.maxY - HorizontalRailMetrics.depth - height : frame.minY + HorizontalRailMetrics.depth,
+                                    y: top ? contentTop - HorizontalRailMetrics.depth - height : frame.minY + HorizontalRailMetrics.depth,
                                     width: width, height: height))
             }
             return rects
@@ -590,14 +621,28 @@ final class EdgePanelController {
         defer { scheduleDebugSnapshot() }
         guard let screen = preferredScreen else { return }
         let visibleFrame = screen.visibleFrame
+        lastUsableArea = visibleFrame
         let frame: NSRect
         if store.edgeSide.isHorizontal {
+            // On a MacBook's top edge the rail joins the display's own notch: the panel runs up
+            // to the screen's real top so the notch is inside it (as the hover target), the
+            // content is inset below the menu bar band, and the rail is centered under the
+            // notch rather than at the user's chosen position.
+            let notch = store.edgeSide == .top ? screen.hardwareNotch : nil
+            let inset: CGFloat = notch.map { max($0.height, screen.frame.maxY - visibleFrame.maxY) } ?? 0
             let width = min(HorizontalRailMetrics.width(providerCount: store.railProviders.count), visibleFrame.width)
-            let height = min(620, visibleFrame.height)
-            let x = visibleFrame.minX + max(0, visibleFrame.width - width) * CGFloat(store.verticalPosition)
-            let y = store.edgeSide == .top ? visibleFrame.maxY - height : visibleFrame.minY
+            let height = min(620, visibleFrame.height) + inset
+            let x = notch != nil
+                ? (screen.frame.midX - width / 2).rounded()
+                : visibleFrame.minX + max(0, visibleFrame.width - width) * CGFloat(store.verticalPosition)
+            let top = notch != nil ? screen.frame.maxY : visibleFrame.maxY
+            let y = store.edgeSide == .top ? top - height : visibleFrame.minY
             frame = NSRect(x: x, y: y, width: width, height: height)
+            if state.topInset != inset { state.topInset = inset }
+            if state.joinedNotch != notch { state.joinedNotch = notch }
         } else {
+            if state.topInset != 0 { state.topInset = 0 }
+            if state.joinedNotch != nil { state.joinedNotch = nil }
             let width = RailMetrics.maximumPanelWidth
             let height = RailMetrics.panelHeight(providerCount: store.railProviders.count)
             let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX

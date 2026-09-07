@@ -162,14 +162,13 @@ struct CursorLocalSession {
 }
 
 /// Minimal read-only reader for the VS Code style key/value table Cursor keeps its auth state in.
+/// Opened through `ReadOnlySQLite`: the store runs in WAL mode, and a plain read-only open fails
+/// once Cursor has quit and checkpointed, which used to read as "state unreadable".
 private final class CursorStateStore {
     private var handle: OpaquePointer?
 
     init(path: String) throws {
-        var db: OpaquePointer?
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
-        guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK, let db else {
-            sqlite3_close(db)
+        guard let db = ReadOnlySQLite.open(path: path) else {
             throw CursorProviderError.stateUnreadable
         }
         handle = db

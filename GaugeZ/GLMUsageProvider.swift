@@ -59,7 +59,7 @@ enum GLMUsageParser {
               let payload = object["data"] as? [String: Any],
               let limits = payload["limits"] as? [[String: Any]] else { throw GLMProviderError.malformed }
         var windows: [UsageWindow] = []
-        for limit in limits {
+        for (index, limit) in limits.enumerated() {
             guard let percentage = (limit["percentage"] as? NSNumber)?.doubleValue else { continue }
             guard percentage.isFinite, percentage >= 0, percentage <= 100.5 else { throw GLMProviderError.malformed }
             let type = limit["type"] as? String ?? ""
@@ -74,7 +74,12 @@ enum GLMUsageParser {
                 descriptor = ("weekly", "Weekly limit", 10080)
             } else if let unit, let number, number > 0, number < 10000 {
                 descriptor = ("window-\(unit)x\(number)", "Usage (\(number) \(unit == 3 ? "hours" : unit == 6 ? "weeks" : "units"))", nil)
-            } else { continue }
+            } else {
+                // A window shape this build does not know is still a reading; dropping it (or
+                // failing the whole response) would blank the ring the day Z.ai adds one.
+                let base = type.isEmpty ? "limit" : type.lowercased()
+                descriptor = ("\(base)-\(index)", "Usage", nil)
+            }
             var reset: Date?
             if let millis = (limit["nextResetTime"] as? NSNumber)?.doubleValue {
                 guard millis.isFinite, millis > 0, millis < 253_402_300_800_000 else { throw GLMProviderError.malformed }

@@ -1,4 +1,4 @@
-Portions of GLMCredentials.swift are adapted from Codenotch.
+Portions of GLMCredentials.swift and OpenCodeUsageProvider.swift are adapted from Codenotch.
 
 MIT License
 

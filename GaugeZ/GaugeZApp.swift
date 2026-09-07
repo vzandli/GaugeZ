@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @main
@@ -12,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var usageWindow: NSWindow?
     private var settingsObserver: NSObjectProtocol?
+    private var whatsNew: WhatsNewWindowController?
+    private var cancellables = Set<AnyCancellable>()
 
     static func main() {
         let app = NSApplication.shared
@@ -21,12 +24,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        // Applied here, not from the Info.plist alone: the user's presence choice can make this
+        // a regular app with a Dock tile, and the call overrides `LSUIElement` either way.
+        applyPresence(store.appPresence)
+        store.$appPresence
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] presence in self?.applyPresence(presence) }
+            .store(in: &cancellables)
 
         let panelController = EdgePanelController(store: store)
         edgePanelController = panelController
         panelController.show()
-        configureStatusItem()
+        configureMainMenu()
         settingsObserver = NotificationCenter.default.addObserver(
             forName: .gaugezOpenSettings, object: nil, queue: .main
         ) { [weak self] _ in
@@ -34,9 +45,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self.openSettings() }
         }
         store.refresh()
-        if !UserDefaults.standard.bool(forKey: "hasSeenIntroduction") {
+        if store.isPreview {
+            // Debug aid: GAUGEZ_DEBUG_WHATSNEW=1 shows this version's notes in preview mode.
+            if ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_WHATSNEW"] != nil,
+               let note = ReleaseNotes.note(for: Self.marketingVersion) ?? ReleaseNotes.all.first {
+                let controller = WhatsNewWindowController(version: note.version, defaults: UserDefaults(suiteName: "GaugeZ.preview")!)
+                whatsNew = controller
+                controller.showIfNeeded()
+                if let window = NSApp.windows.first(where: { $0.title == "What's New in GaugeZ" }) { debugSnapshot(of: window, name: "whats-new") }
+            }
+            return
+        }
+
+        // What changed, once per version. A fresh install gets the introduction instead, and is
+        // recorded as having seen this version so the notes do not appear on its second launch.
+        let whatsNew = WhatsNewWindowController(version: Self.marketingVersion)
+        self.whatsNew = whatsNew
+        let firstLaunch = !UserDefaults.standard.bool(forKey: "hasSeenIntroduction") && whatsNew.lastSeenVersion == nil
+        if firstLaunch {
+            whatsNew.markSeen()
+            openSettingsWindow()
+        } else if !whatsNew.showIfNeeded(), !UserDefaults.standard.bool(forKey: "hasSeenIntroduction") {
             openSettingsWindow()
         }
+    }
+
+    static var marketingVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    /// Closing Settings must not take the rail with it, which is the default for a Dock app.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// The way back in when there is no Dock tile and no menu bar item: opening GaugeZ again
+    /// from Applications or Spotlight while it is running lands here.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        openSettingsWindow()
+        return true
+    }
+
+    private func applyPresence(_ presence: AppPresence) {
+        NSApp.setActivationPolicy(presence.activationPolicy)
+        if presence.wantsStatusItem {
+            if statusItem == nil { configureStatusItem() }
+        } else if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+        }
+        updateManager.hasMenuBarPresence = presence.wantsStatusItem
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -93,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Debug aid: with GAUGEZ_DEBUG_SNAPSHOTS set, renders the settings window to a PNG.
-    private func debugSnapshot(of window: NSWindow) {
+    private func debugSnapshot(of window: NSWindow, name: String = "settings-window") {
         guard let directory = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_SNAPSHOTS"] else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(700))
@@ -101,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             guard let data = rep.representation(using: .png, properties: [:]) else { return }
-            try? data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("settings-window.png"))
+            try? data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
         }
     }
 
@@ -146,7 +204,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = image
             button.imageScaling = .scaleProportionallyDown
         }
+        item.menu = makeMenu()
+        statusItem = item
+    }
 
+    /// Status-item shortcuts alone only work while that menu is open. A main menu makes Usage,
+    /// Refresh, Settings, and Quit reachable in the regular windows, and is the app menu when
+    /// GaugeZ shows a Dock tile.
+    private func configureMainMenu() {
+        let mainMenu = NSMenu()
+        let appMenu = NSMenuItem(title: "GaugeZ", action: nil, keyEquivalent: "")
+        appMenu.submenu = makeMenu()
+        mainMenu.addItem(appMenu)
+        NSApp.mainMenu = mainMenu
+    }
+
+    private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(withTitle: "Show GaugeZ", action: #selector(toggleNotch), keyEquivalent: "")
@@ -163,16 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuItem.target = self
             menuItem.image = nil
         }
-        item.menu = menu
-        statusItem = item
-
-        // Status-item shortcuts alone only work while that menu is open. A main menu
-        // makes Usage, Refresh, Settings, and Quit reachable in the regular windows.
-        let mainMenu = NSMenu()
-        let appMenu = NSMenuItem(title: "GaugeZ", action: nil, keyEquivalent: "")
-        appMenu.submenu = menu.copy() as? NSMenu
-        mainMenu.addItem(appMenu)
-        NSApp.mainMenu = mainMenu
+        return menu
     }
 }
 

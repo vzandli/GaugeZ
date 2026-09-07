@@ -3,6 +3,17 @@ import Security
 
 /// Metadata and a reference to the exact item are read together, without requesting its secret.
 enum ClaudeKeychain {
+    /// `errSecInDarkWake` (-25320): the Mac has just woken and Security cannot show UI yet. It says
+    /// nothing about the account or the grant, so it must never read as a refusal. Security exports
+    /// no named constant for it.
+    static let darkWakeStatus: OSStatus = -25320
+
+    /// A read that failed for a reason unrelated to the grant is transient; everything else is a
+    /// refusal that automatic polling must not repeat.
+    static func failure(for status: OSStatus) -> ClaudeProviderError {
+        status == darkWakeStatus ? .keychainUnavailable(status) : .keychainDenied(status)
+    }
+
     struct Match: Equatable, Sendable {
         let modifiedAt: Date?
         let persistentRef: Data
@@ -19,7 +30,7 @@ enum ClaudeKeychain {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw ClaudeProviderError.keychainDenied(status) }
+        guard status == errSecSuccess else { throw failure(for: status) }
         let items = result as? [[String: Any]] ?? (result as? [String: Any]).map { [$0] } ?? []
         return newest(in: items.compactMap { item in
             guard let ref = item[kSecValuePersistentRef as String] as? Data else { return nil }
@@ -44,7 +55,7 @@ enum ClaudeKeychain {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { throw ClaudeProviderError.notSignedIn }
-        guard status == errSecSuccess else { throw ClaudeProviderError.keychainDenied(status) }
+        guard status == errSecSuccess else { throw failure(for: status) }
         guard let data = result as? Data, !data.isEmpty else { throw ClaudeProviderError.malformedCredential }
         return data
     }
@@ -52,6 +63,8 @@ enum ClaudeKeychain {
 
 /// One memory-only cache per profile. A refusal is retried only after the item changes or
 /// an explicit user retry. Rotation is detected even when the previously read token is valid.
+/// A transient failure (the Keychain unavailable right after wake) is never recorded, so the
+/// next poll simply tries again.
 final class ClaudeCredentialCache: @unchecked Sendable {
     private let lock = NSLock()
     private var stamp: ClaudeKeychain.Match?
@@ -76,8 +89,12 @@ final class ClaudeCredentialCache: @unchecked Sendable {
         lock.unlock()
         // A Keychain prompt must never hold the lock needed by UI-driven retry/forget.
         let fresh = Result { try reload() }
+        var transient = false
+        if case .failure(let error) = fresh, case .keychainUnavailable = error as? ClaudeProviderError {
+            transient = true
+        }
         lock.lock()
-        if generation == currentGeneration {
+        if generation == currentGeneration, !transient {
             stamp = current
             attemptedAt = now
             result = fresh

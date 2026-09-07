@@ -17,6 +17,11 @@ final class EdgePanelState: ObservableObject {
     @Published var attachment: EdgeAttachment?
     @Published var hoveredProvider: ProviderID?
     @Published var attachmentHeight: CGFloat = 380
+    /// Band at the top of a top-edge panel that holds nothing: the menu bar and, on a MacBook,
+    /// the hardware notch the rail hangs beneath. Zero on every other placement.
+    @Published var topInset: CGFloat = 0
+    /// The display's own notch when the rail is joined to it; nil elsewhere.
+    @Published var joinedNotch: HardwareNotch?
 }
 
 struct EdgePanelActions {
@@ -317,6 +322,8 @@ struct EdgeRailView: View {
     let actions: EdgePanelActions
     var renderingEdge: EdgeSide? = nil
     var contentRotation: Double = 0
+    /// Joined to a hardware notch the rail shows nothing at rest: the notch itself is the tab.
+    var hidesCollapsedPill = false
 
     @State private var gearZoneHovered = false
 
@@ -337,7 +344,7 @@ struct EdgeRailView: View {
 
                 expandedContent
                     .transition(.opacity.animation(.easeOut(duration: 0.12).delay(0.02)))
-            } else {
+            } else if !hidesCollapsedPill {
                 collapsedPill(edge: edge)
                     .transition(.opacity.animation(.easeOut(duration: 0.12)))
             }
@@ -648,7 +655,7 @@ struct ProviderLogo: View {
     let size: CGFloat
 
     var body: some View {
-        ((provider.kind == .glm || provider.kind == .grok) ? Image(systemName: provider.symbolName) : Image(provider.logoAssetName))
+        (provider.usesSymbolLogo ? Image(systemName: provider.symbolName) : Image(provider.logoAssetName))
             .renderingMode(.template)
             .resizable()
             .interpolation(.high)

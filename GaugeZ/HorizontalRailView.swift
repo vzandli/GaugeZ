@@ -18,6 +18,8 @@ struct HorizontalRailView: View {
         GeometryReader { geometry in
             let top = store.edgeSide == .top
             let railLength = RailMetrics.shapeHeight(providerCount: store.railProviders.count)
+            let inset = top ? state.topInset : 0
+            let available = geometry.size.height - inset
             ZStack(alignment: top ? .top : .bottom) {
                 if state.isExpanded, let attachment = state.attachment {
                     ScrollView {
@@ -28,7 +30,7 @@ struct HorizontalRailView: View {
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(width: RailMetrics.attachmentWidth - RailMetrics.pointerDepth,
-                           height: min(state.attachmentHeight, max(0, geometry.size.height - HorizontalRailMetrics.depth - HorizontalRailMetrics.cardGap)))
+                           height: min(state.attachmentHeight, max(0, available - HorizontalRailMetrics.depth - HorizontalRailMetrics.cardGap)))
                     .overlay(alignment: top ? .top : .bottom) {
                         if case .detail(let provider) = attachment {
                             CardPointerView(edge: .right)
@@ -47,13 +49,26 @@ struct HorizontalRailView: View {
                 // drag grip, collapsed color chips, and materials identical across edges.
                 // Only the meter contents and gear icon rotate back to stay readable.
                 EdgeRailView(state: state, providers: store.railProviders, actions: actions,
-                             renderingEdge: top ? .right : .left, contentRotation: 90)
+                             renderingEdge: top ? .right : .left, contentRotation: 90,
+                             hidesCollapsedPill: top && state.joinedNotch != nil)
                     .frame(width: HorizontalRailMetrics.depth, height: railLength,
                            alignment: top ? .trailing : .leading)
                     .rotationEffect(.degrees(-90))
                     .frame(width: railLength, height: HorizontalRailMetrics.depth)
             }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: top ? .top : .bottom)
+            .frame(width: geometry.size.width, height: max(0, available), alignment: top ? .top : .bottom)
+            // The inset band above holds the menu bar and the hardware notch; nothing is drawn in it.
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
+            .overlay(alignment: .top) {
+                // Joined to the notch, the notch itself is the hover target while the rail rests.
+                if top, let notch = state.joinedNotch, !state.isExpanded {
+                    Color.clear
+                        .frame(width: notch.width, height: notch.height)
+                        .contentShape(Rectangle())
+                        .onHover(perform: actions.railHover)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         .environment(\.colorScheme, .dark)
     }

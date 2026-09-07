@@ -26,11 +26,22 @@ struct ProviderRegressionTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         try profiles(root)
         try credentials()
+        try keychainTransient()
+        try claudeResponseShapes()
+        try resetCopy()
         try glm(root)
         try grok(root)
         try grokSessionAndCost(root)
+        try await grokActivity(root)
+        try await inferredActivity(root)
+        try elapsedAndCaps()
+        try releaseNotes()
+        try openCodeParsing(root)
+        try await openCodeNetworking(root: root, defaults: defaults)
         try await cursor(root)
         try retry(defaults)
+        try codexParsing(root)
+        try await codexNetworking(root: root, defaults: defaults)
         try await networking(root: root, defaults: defaults)
         try await grokNetworking(root: root, defaults: defaults)
         print("Passed \(checks) provider regression checks.")
@@ -100,6 +111,58 @@ struct ProviderRegressionTests {
         else { throw Failure(description: "Expired credentials should retain a stale reading") }
     }
 
+    /// -25320 is what the Keychain answers right after waking; it says nothing about the grant.
+    static func keychainTransient() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        guard case .keychainUnavailable = ClaudeKeychain.failure(for: ClaudeKeychain.darkWakeStatus) else {
+            throw Failure(description: "Dark-wake status is transient, not a refusal")
+        }
+        guard case .keychainDenied = ClaudeKeychain.failure(for: errSecAuthFailed) else {
+            throw Failure(description: "Auth failure stays a refusal")
+        }
+        guard case .stale = ClaudeProviderError.keychainUnavailable(ClaudeKeychain.darkWakeStatus).providerHealth else {
+            throw Failure(description: "A transient Keychain failure keeps the last reading as stale")
+        }
+        checks += 3
+        let cache = ClaudeCredentialCache()
+        let stamp = ClaudeKeychain.Match(modifiedAt: now, persistentRef: Data([9]))
+        var reads = 0
+        func darkWake() throws -> ClaudeCredential { reads += 1; throw ClaudeProviderError.keychainUnavailable(ClaudeKeychain.darkWakeStatus) }
+        try rejects({ _ = try cache.value(stamp: stamp, now: now, reload: darkWake) }, "Transient failure surfaces")
+        try rejects({ _ = try cache.value(stamp: stamp, now: now.addingTimeInterval(60), reload: darkWake) }, "Transient failure surfaces again")
+        try expect(reads == 2, "A transient failure is retried on the next poll rather than pinned")
+        let credential = ClaudeCredential(accessToken: "fixture", expiresAt: nil, subscriptionType: nil, sourceDescription: "fixture")
+        let loaded = try cache.value(stamp: stamp, now: now.addingTimeInterval(120)) { reads += 1; return credential }
+        try expect(loaded.accessToken == "fixture" && reads == 3, "Recovers without a forget or a rotation")
+    }
+
+    static func claudeResponseShapes() throws {
+        let both = Data(#"{"limits":[{"kind":"session","percent":30,"resets_at":"2027-01-01T00:00:00Z"},{"kind":"weekly_all","percent":10},{"kind":"weekly_opus","percent":5}],"five_hour":{"utilization":30,"resets_at":"2027-01-01T00:00:00Z"},"seven_day":{"utilization":10}}"#.utf8)
+        let merged = try ClaudeUsageParser.windows(from: both)
+        try expect(merged.map(\.id) == ["five_hour", "seven_day", "seven_day_opus"], "Both shapes merge to one window per id")
+        try expect(merged[0].usedPercent == 30 && merged[0].resetsAt == GrokUsageParser.date("2027-01-01T00:00:00Z"), "Array shape carries value and reset")
+        let arrayOnly = try ClaudeUsageParser.windows(from: Data(#"{"limits":[{"kind":"session","percent":42}]}"#.utf8))
+        try expect(arrayOnly.count == 1 && arrayOnly[0].id == "five_hour" && arrayOnly[0].label == "5-hour limit", "Array-only response still yields the session window")
+        let rolledOver = try ClaudeUsageParser.windows(from: Data(#"{"limits":[{"kind":"weekly_all","percent":10}],"five_hour":{"utilization":0,"resets_at":"2027-01-01T00:00:00Z"}}"#.utf8))
+        try expect(rolledOver.map(\.id) == ["five_hour", "seven_day"], "A window missing from the array is taken from the named object")
+        try rejects({ _ = try ClaudeUsageParser.windows(from: Data(#"{"limits":[{"kind":"session","percent":140}]}"#.utf8)) }, "Out-of-range array percent is rejected")
+    }
+
+    static func resetCopy() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let monthOut = now.addingTimeInterval(26 * 86_400)
+        try expect(ResetCopy.daysApart(from: now, to: monthOut, calendar: calendar) == 26, "Calendar days apart")
+        try expect(ResetCopy.absolute(monthOut, now: now, calendar: calendar) == monthOut.formatted(.dateTime.month(.abbreviated).day()), "A reset weeks away shows the date, not a weekday")
+        let thisWeek = now.addingTimeInterval(3 * 86_400)
+        try expect(ResetCopy.absolute(thisWeek, now: now, calendar: calendar) == thisWeek.formatted(.dateTime.weekday(.abbreviated).hour().minute()), "A reset this week keeps the weekday")
+        let soon = now.addingTimeInterval(3 * 3600)
+        try expect(ResetCopy.absolute(soon, now: now, calendar: calendar) == soon.formatted(date: .omitted, time: .shortened), "A reset today is a time only")
+        let sevenDays = calendar.date(byAdding: .day, value: 7, to: now)!
+        try expect(ResetCopy.absolute(sevenDays, now: now, calendar: calendar) == sevenDays.formatted(.dateTime.month(.abbreviated).day()), "Seven calendar days is already a date")
+    }
+
     static func glm(_ root: URL) throws {
         let data = Data(#"{"code":200,"success":true,"data":{"level":"pro","limits":[{"type":"TIME_LIMIT","percentage":4},{"type":"CREDIT_LIMIT","unit":6,"number":1,"percentage":8.1,"nextResetTime":1800000000000},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":12.5}]}}"#.utf8)
         let parsed = try GLMUsageParser.parse(data)
@@ -123,9 +186,168 @@ struct ProviderRegressionTests {
         try expect(GLMCredentials.zcode(file) == nil, "Skip encrypted ZCode credentials")
         try Data(#"{"provider":{"builtin:zai-coding-plan":{"enabled":false,"options":{"apiKey":"fixture","baseURL":"https://api.z.ai"}}}}"#.utf8).write(to: file)
         try expect(GLMCredentials.zcodePlanKey(file) == nil, "Ignore disabled ZCode entries")
+        try Data(#"{"provider":{"builtin:zai-coding-plan":{"options":{"apiKey":"fixture"}}}}"#.utf8).write(to: file)
+        try expect(GLMCredentials.zcodePlanKey(file)?.baseURL.host == "api.z.ai", "A plan key without a base URL is the global console")
+        try Data(#"{"provider":{"builtin:zai-coding-plan":{"options":{"apiKey":"fixture","baseURL":"https://api.openai.com/v1"}}}}"#.utf8).write(to: file)
+        try expect(GLMCredentials.zcodePlanKey(file) == nil, "A plan entry aimed elsewhere is not a GLM key")
+        let tolerant = try GLMUsageParser.parse(Data(#"{"code":200,"success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":12},{"type":"NEW_LIMIT","percentage":50},{"type":"NEW_LIMIT","percentage":60}]}}"#.utf8))
+        try expect(tolerant.windows.map(\.id) == ["session", "new_limit-1", "new_limit-2"], "Unknown window shapes are kept rather than dropped")
         try Data(#"{"zhipu":{"key":"fixture"}}"#.utf8).write(to: file)
         try expect(GLMCredentials.openCode(file)?.baseURL.host == "open.bigmodel.cn", "OpenCode China provider mapping")
         try expect(!GLMCredentials.isZaiHost("api.z.ai.attacker.test"), "Reject lookalike credential hosts")
+    }
+
+    static func grokActivity(_ root: URL) async throws {
+        let home = root.appendingPathComponent("grok-home")
+        let cwd = "/Users/fixture/Documents/my project"
+        let sid = "session-fixture"
+        let encoded = cwd.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        let sessionDir = home.appendingPathComponent(".grok/sessions").appendingPathComponent(encoded).appendingPathComponent(sid)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func writeActive(openedAt: Date) throws {
+            let rows: [[String: Any]] = [["session_id": sid, "pid": Int(ProcessInfo.processInfo.processIdentifier), "cwd": cwd, "opened_at": iso.string(from: openedAt)]]
+            try JSONSerialization.data(withJSONObject: rows).write(to: home.appendingPathComponent(".grok/active_sessions.json"))
+        }
+        try writeActive(openedAt: now)
+        let reader = ActivityReader()
+        let unknown = await reader.readGrokSessions(home: home, now: now)
+        try expect(unknown.count == 1 && unknown[0].state == .unknown && unknown[0].project == "my project", "A live TUI without an update log has unknown activity")
+        let updates = sessionDir.appendingPathComponent("updates.jsonl")
+        try Data("{}\n".utf8).write(to: updates)
+        let working = await reader.readGrokSessions(home: home, now: now)
+        try expect(working.count == 1 && working[0].state == .working, "A recent write is work in progress")
+        let idle = await reader.readGrokSessions(home: home, now: now.addingTimeInterval(ActivityReader.grokStaleAfter + 1))
+        try expect(idle.count == 1 && idle[0].state == .idle, "A TUI that stopped writing is idle, not working")
+        try writeActive(openedAt: now.addingTimeInterval(-86_400))
+        let recycled = await reader.readGrokSessions(home: home, now: now)
+        try expect(recycled.isEmpty, "A pid far older than its registration has been recycled")
+        let resolved = ActivityReader.grokSessionDirectory(id: sid, cwd: cwd, under: home.appendingPathComponent(".grok/sessions"))
+        try expect(resolved?.standardizedFileURL.path == sessionDir.standardizedFileURL.path, "Session directory resolves through Grok's encoding")
+    }
+
+    static func inferredActivity(_ root: URL) async throws {
+        let now = Date()
+        let codexHome = root.appendingPathComponent("codex-home")
+        try FileManager.default.createDirectory(at: codexHome.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        let rollout = codexHome.appendingPathComponent("sessions/rollout-fixture.jsonl")
+        try Data("{}\n".utf8).write(to: rollout)
+        var db: OpaquePointer?
+        guard sqlite3_open(codexHome.appendingPathComponent("state_5.sqlite").path, &db) == SQLITE_OK else { throw Failure(description: "Codex fixture DB failed") }
+        sqlite3_exec(db, "CREATE TABLE threads(rollout_path TEXT, updated_at_ms INTEGER, archived INTEGER);", nil, nil, nil)
+        var statement: OpaquePointer?
+        sqlite3_prepare_v2(db, "INSERT INTO threads VALUES (?, 1, 0), ('/nowhere/missing.jsonl', 2, 0)", -1, &statement, nil)
+        sqlite3_bind_text(statement, 1, rollout.path, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_step(statement)
+        sqlite3_finalize(statement)
+        sqlite3_close(db)
+        let reader = ActivityReader()
+        try expect(ActivityReader.newestCodexRollout(in: codexHome)?.standardizedFileURL.path == rollout.standardizedFileURL.path, "Newest existing rollout wins over a missing newer one")
+        let working = await reader.readCodexSessions(codexHome: codexHome, now: now)
+        try expect(working.count == 1 && working[0].state == .working && working[0].isInferred && working[0].since != nil, "A rollout written moments ago is an inferred working turn")
+        let ended = await reader.readCodexSessions(codexHome: codexHome, now: now.addingTimeInterval(ActivityReader.codexStaleAfter + 1))
+        try expect(ended.isEmpty, "An old rollout is a finished turn, not activity")
+        let absent = await reader.readCodexSessions(codexHome: root.appendingPathComponent("absent"), now: now)
+        try expect(absent.isEmpty, "No Codex state means no sessions")
+        try expect(ActivityReader.codexHome(home: root, environment: ["CODEX_HOME": root.path]).standardizedFileURL.path == root.standardizedFileURL.path, "Respect CODEX_HOME for activity")
+
+        let brain = root.appendingPathComponent("antigravity/brain")
+        let logs = brain.appendingPathComponent("trajectory-1/.system_generated/logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        try Data("{}\n".utf8).write(to: logs.appendingPathComponent("transcript.jsonl"))
+        let antigravity = await reader.readAntigravitySessions(root: brain, now: now)
+        try expect(antigravity.count == 1 && antigravity[0].state == .working && antigravity[0].isInferred && antigravity[0].id == "antigravity-trajectory-1", "A transcript written moments ago is an inferred working turn")
+        let quiet = await reader.readAntigravitySessions(root: brain, now: now.addingTimeInterval(ActivityReader.antigravityStaleAfter + 1))
+        try expect(quiet.isEmpty, "A quiet transcript is not activity")
+        try expect(ProviderID.codex.supportsActivity && ProviderID.antigravity.supportsActivity && !ProviderID.opencode.supportsActivity, "Activity support per provider")
+    }
+
+    static func elapsedAndCaps() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try expect(ElapsedCopy.text(since: now.addingTimeInterval(-10), now: now) == "just now", "Under 45 seconds is just now")
+        try expect(ElapsedCopy.text(since: now.addingTimeInterval(-6 * 60 - 20), now: now) == "6 min", "Minutes round")
+        try expect(ElapsedCopy.text(since: now.addingTimeInterval(-3600), now: now) == "1 hr", "Whole hours")
+        try expect(ElapsedCopy.text(since: now.addingTimeInterval(-3900), now: now) == "1 hr 5 min", "Hours and minutes")
+        try expect(ElapsedCopy.text(since: now.addingTimeInterval(60), now: now) == "just now", "A future stamp never goes negative")
+        try expect(SessionListCap.count(visibleHeight: 400) == SessionListCap.minimum, "A small display still shows a few rows")
+        try expect(SessionListCap.count(visibleHeight: 5000) == SessionListCap.maximum, "A huge display is capped for glanceability")
+        try expect(SessionListCap.count(visibleHeight: 700) == 8, "Rows are solved from the display height")
+    }
+
+    static func releaseNotes() throws {
+        let project = try String(contentsOfFile: "GaugeZ.xcodeproj/project.pbxproj", encoding: .utf8)
+        let versions = Set(project.split(separator: "\n").compactMap { line -> String? in
+            guard let range = line.range(of: "MARKETING_VERSION = ") else { return nil }
+            return line[range.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: "; \t"))
+        })
+        try expect(versions.count == 1, "One marketing version across configurations")
+        let current = versions.first!
+        try expect(ReleaseNotes.note(for: current) != nil, "MARKETING_VERSION \(current) has a release note; add one to ReleaseNotes.swift")
+        try expect(Set(ReleaseNotes.all.map(\.version)).count == ReleaseNotes.all.count, "No version is listed twice")
+        try expect(ReleaseNotes.all.allSatisfy { !$0.headline.isEmpty && !$0.changes.isEmpty && $0.changes.allSatisfy { !$0.title.isEmpty } }, "Every shipped note says something")
+        let notes = [ReleaseNote(version: "2.0.0", headline: "Fixture", changes: [.init("Change")])]
+        try expect(ReleaseNotes.unseen(in: "2.0.0", lastSeen: nil, notes: notes)?.version == "2.0.0", "A never-seen version shows its note")
+        try expect(ReleaseNotes.unseen(in: "2.0.0", lastSeen: "1.9.0", notes: notes)?.version == "2.0.0", "An update shows the new version's note")
+        try expect(ReleaseNotes.unseen(in: "2.0.0", lastSeen: "2.0.0", notes: notes) == nil, "A seen version is not shown again")
+        try expect(ReleaseNotes.unseen(in: "2.0.1", lastSeen: "2.0.0", notes: notes) == nil, "A version with no note shows nothing")
+    }
+
+    static func openCodeParsing(_ root: URL) throws {
+        let live = Data(#"{"usage":{"rolling":{"status":"ok","percent":12.4,"resetsAt":"2026-09-06T12:31:06.611Z"},"weekly":{"status":"ok","percent":3,"resetsAt":"2026-09-07T00:00:00Z"},"monthly":{"status":"ok","percent":0,"resetsAt":"2026-10-03T13:09:45.611Z"}}}"#.utf8)
+        let windows = try OpenCodeUsageParser.windows(from: live)
+        try expect(windows.map(\.id) == ["rolling", "weekly", "monthly"], "OpenCode windows in headline order")
+        try expect(windows[0].remainingPercent == 88 && windows[0].durationMinutes == 300, "Percent is already used; rolling is the 5-hour window")
+        try expect(windows[0].resetsAt == OpenCodeUsageParser.date(from: "2026-09-06T12:31:06.611Z") && windows[1].resetsAt == OpenCodeUsageParser.date(from: "2026-09-07T00:00:00Z"), "Fractional and plain resets both parse")
+        for json in ["{}", #"{"usage":{}}"#, #"{"usage":{"rolling":{"percent":-1}}}"#, #"{"usage":{"rolling":{"percent":"12"}}}"#] {
+            try rejects({ _ = try OpenCodeUsageParser.windows(from: Data(json.utf8)) }, "Missing or invalid OpenCode data is not free quota")
+        }
+        let file = root.appendingPathComponent("opencode-auth.json")
+        try Data(#"{"opencode-go":{"type":"api","key":"go-fixture"},"openai":{"type":"api","key":"sk-other"}}"#.utf8).write(to: file)
+        try expect(OpenCodeCredentials.load(from: file)?.token == "go-fixture", "Read the Go key from an object entry")
+        try Data(#"{"opencode-go":"go-plain"}"#.utf8).write(to: file)
+        try expect(OpenCodeCredentials.load(from: file)?.token == "go-plain", "Read the Go key from a bare string entry")
+        try Data(#"{"openai":{"type":"api","key":"sk-other"}}"#.utf8).write(to: file)
+        try expect(OpenCodeCredentials.load(from: file) == nil, "Never claim another vendor's key")
+        try Data(#"{"opencode-go":{"key":""}}"#.utf8).write(to: file)
+        try expect(OpenCodeCredentials.load(from: file) == nil, "An empty key is not a sign-in")
+        try Data(#"{"opencode-go":{"key":"bad\r\nheader"}}"#.utf8).write(to: file)
+        try expect(OpenCodeCredentials.load(from: file) == nil, "Reject credential header injection")
+        try expect(OpenCodeCredentials.load(from: root.appendingPathComponent("missing.json")) == nil, "No auth file means not signed in")
+    }
+
+    static func openCodeNetworking(root: URL, defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .opencode, defaults: defaults)
+        let provider = OpenCodeUsageProvider(session: session, retryPolicy: policy, loadCredentials: { .init(token: "go-fixture") })
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, #"{"usage":{"rolling":{"percent":40},"weekly":{"percent":10}}}"#)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .opencode && snapshot.remainingPercent == 60 && snapshot.planName == "OpenCode Go", "OpenCode snapshot")
+        let request = FixtureProtocol.requests.last!
+        try expect(request.url == OpenCodeUsageParser.endpoint && request.httpMethod == "GET" && request.value(forHTTPHeaderField: "Authorization") == "Bearer go-fixture", "Official Go usage route with bearer key")
+        FixtureProtocol.responses = [(401, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected OpenCode 401") }
+        catch OpenCodeProviderError.unauthorized { checks += 1 }
+        FixtureProtocol.responses = [(403, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected OpenCode 403") }
+        catch OpenCodeProviderError.noPlan { checks += 1 }
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected OpenCode throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "OpenCode persists server backoff")
+        let count = FixtureProtocol.requests.count
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected local backoff") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No OpenCode request during backoff")
+        policy.reset()
+        let signedOut = OpenCodeUsageProvider(session: session, retryPolicy: policy, loadCredentials: { nil })
+        do { _ = try await signedOut.fetchSnapshot(); throw Failure(description: "Expected not signed in") }
+        catch OpenCodeProviderError.notSignedIn { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No request without a key")
     }
 
     static func cursor(_ root: URL) async throws {
@@ -192,6 +414,86 @@ struct ProviderRegressionTests {
         try expect(next.until == now.addingTimeInterval(120), "Consecutive throttles increase delay")
         first.succeeded()
         try expect(first.deadline == nil, "Successful reading clears backoff")
+    }
+
+    static func codexParsing(_ root: URL) throws {
+        let free = Data(#"{"rate_limit":{"primary_window":{"limit_window_seconds":2592000,"used_percent":12.4,"reset_at":1800000000},"secondary_window":{"limit_window_seconds":604800,"used_percent":3,"reset_after_seconds":3600}},"additional_rate_limits":[]}"#.utf8)
+        let now = Date(timeIntervalSince1970: 1_799_000_000)
+        let windows = try CodexWebUsage.windows(from: free, now: now)
+        try expect(windows.map(\.id) == ["primary", "secondary"], "Both windows read")
+        try expect(windows[0].label == "30-day limit" && windows[0].durationMinutes == 43_200, "A free plan's 30-day window is labeled from its length")
+        try expect(windows[0].usedPercent == 12 && windows[0].resetsAt == Date(timeIntervalSince1970: 1_800_000_000), "Epoch reset and rounded percent")
+        try expect(windows[1].label == "Weekly limit" && windows[1].resetsAt == now.addingTimeInterval(3600), "reset_after_seconds is relative to now")
+        for json in ["{}", #"{"rate_limit":{}}"#, #"{"rate_limit":{"primary_window":{"limit_window_seconds":300}}}"#] {
+            try rejects({ _ = try CodexWebUsage.windows(from: Data(json.utf8)) }, "Missing Codex windows are not free quota")
+        }
+        try expect(CodexWindowLabel.label(minutes: nil, fallback: "Current limit") == "Current limit", "Omitted duration keeps the fallback label")
+        func jwt(_ claims: [String: Any]) throws -> String {
+            let payload = try JSONSerialization.data(withJSONObject: claims).base64EncodedString().replacingOccurrences(of: "=", with: "")
+            return "header." + payload + ".sig"
+        }
+        let access = try jwt(["exp": 4_102_444_800])
+        let identity = try jwt(["email": "fixture@example.test", "https://api.openai.com/auth": ["chatgpt_plan_type": "plus"]])
+        let auth = try JSONSerialization.data(withJSONObject: ["tokens": ["access_token": access, "account_id": "acct-fixture", "id_token": identity]])
+        let credential = try CodexWebCredential.decode(auth)
+        try expect(credential.accountID == "acct-fixture" && credential.email == "fixture@example.test" && credential.planType == "plus", "Identity from the CLI's id_token")
+        try expect(credential.expiresAt == Date(timeIntervalSince1970: 4_102_444_800), "Expiry from the access token's exp claim")
+        try rejects({ _ = try CodexWebCredential.decode(Data(#"{"OPENAI_API_KEY":"sk-fixture","tokens":null}"#.utf8)) }, "An API-key sign-in has no ChatGPT usage to read")
+        try rejects({ _ = try CodexWebCredential.decode(Data(#"{"tokens":{"access_token":"bad\r\nheader","account_id":"a"}}"#.utf8)) }, "Reject credential header injection")
+        try expect(try CodexWebCredential.load(url: root.appendingPathComponent("missing-auth.json")) == nil, "No auth file means the CLI never signed in")
+        try expect(CodexWebCredential.authURL(home: root, environment: ["CODEX_HOME": root.path]) == root.appendingPathComponent("auth.json"), "Respect CODEX_HOME")
+        let bin = root.appendingPathComponent("codex-bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        // The machine running this may have its own codex in a system directory, so only the
+        // fixture's precedence is asserted, not the absence of every install.
+        let cli = bin.appendingPathComponent("codex")
+        try expect(CodexInstallation.locateExecutable(home: root, environment: ["PATH": bin.path], applicationBundles: []) == nil, "Nothing on the path yet")
+        try Data("#!/bin/sh\n".utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        try expect(CodexInstallation.locateExecutable(home: root, environment: ["PATH": bin.path], applicationBundles: [])?.path == cli.path, "A codex CLI on the user's PATH is found")
+        try expect(CodexInstallation.locateExecutable(home: root, environment: ["PATH": bin.path], applicationBundles: [root.appendingPathComponent("absent")])?.path == cli.path, "A missing app bundle falls through to the CLI")
+        try expect(CodexInstallation.searchDirectories(home: root, environment: ["PATH": "/a:/b:/a"]).prefix(2) == ["/a", "/b"], "PATH entries lead the search, deduplicated")
+        try expect(CodexInstallation.environment(for: cli, base: ["PATH": "/usr/bin"])["PATH"]?.hasPrefix(bin.path) == true, "The launcher's own directory leads the child's PATH")
+    }
+
+    static func codexNetworking(root: URL, defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .codex, defaults: defaults)
+        let credential = CodexWebCredential(accessToken: "codex-fixture", accountID: "acct-fixture", expiresAt: .distantFuture, email: nil, planType: "plus")
+        let provider = CodexUsageProvider(session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: { credential })
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, #"{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":40}}}"#)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .codex && snapshot.remainingPercent == 60 && snapshot.planName == "ChatGPT Plus", "Codex reads through the CLI sign-in when no app-server exists")
+        let request = FixtureProtocol.requests.last!
+        try expect(request.url == CodexWebUsage.endpoint && request.httpMethod == "GET", "Official usage route, read-only")
+        try expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer codex-fixture" && request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "acct-fixture", "Codex account headers")
+        FixtureProtocol.responses = [(401, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Codex 401") }
+        catch CodexProviderError.unauthorized { checks += 1 }
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Codex throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "Codex persists server backoff")
+        let count = FixtureProtocol.requests.count
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected local backoff") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Codex request during backoff")
+        policy.reset()
+        let missing = CodexUsageProvider(session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: { nil })
+        do { _ = try await missing.fetchSnapshot(); throw Failure(description: "Expected not installed") }
+        catch CodexProviderError.notInstalled { checks += 1 }
+        let expired = CodexUsageProvider(session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: {
+            CodexWebCredential(accessToken: "codex-fixture", accountID: "acct-fixture", expiresAt: .distantPast, email: nil, planType: nil)
+        })
+        do { _ = try await expired.fetchSnapshot(); throw Failure(description: "Expected expired sign-in") }
+        catch CodexProviderError.sessionExpired { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "Expired or missing credentials never sent")
+        try expect(policy.throttled(retryAfter: 5).until.timeIntervalSince(Date()) > 55, "Local throttle honors the one-minute floor")
+        policy.reset()
     }
 
     static func grok(_ root: URL) throws {
