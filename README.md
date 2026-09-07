@@ -16,7 +16,7 @@ Grok Build, and OpenCode quota is left, on any screen edge.
 
 <br>
 
-<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail on the right edge with Claude, Cursor, Codex, Antigravity, Grok Build, and GLM rings, and the Antigravity detail card showing Claude/GPT and Gemini 5-hour and weekly limits">
+<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail on the right edge with Claude, Cursor, Codex, Antigravity, GLM, Grok Build, and OpenCode rings, and the Antigravity detail card showing Claude/GPT and Gemini 5-hour and weekly limits">
 
 </div>
 
