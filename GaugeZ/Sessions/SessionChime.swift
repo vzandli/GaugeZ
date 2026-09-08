@@ -4,10 +4,20 @@ import Darwin
 
 @MainActor
 enum SessionChime {
+    /// The macOS alert sounds, offered by name in Settings.
+    static let systemSounds = [
+        "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",
+        "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"
+    ]
+    static let defaultFinished = "Glass"
+    static let defaultWaiting = "Funk"
+
     private static var player: AVAudioPlayer?
-    static func play(_ reason: SessionCompletionWatcher.Reason) {
-        let name = reason == .finished ? "Glass" : "Funk"
-        guard let sound = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")) else { return }
+
+    /// Plays one of `systemSounds`; an unknown name falls back to the finished-work default.
+    static func play(named name: String) {
+        let chosen = systemSounds.contains(name) ? name : defaultFinished
+        guard let sound = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: "/System/Library/Sounds/\(chosen).aiff")) else { return }
         player = sound
         sound.prepareToPlay()
         sound.play()

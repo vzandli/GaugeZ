@@ -99,6 +99,22 @@ final class UsageStore: ObservableObject {
     @Published var sessionChimeEnabled = UserDefaults.standard.object(forKey: "sessionChimeEnabled") as? Bool ?? false {
         didSet { UserDefaults.standard.set(sessionChimeEnabled, forKey: "sessionChimeEnabled") }
     }
+    /// System sound names for each session event; see `SessionChime.systemSounds`.
+    @Published var finishedChime = UserDefaults.standard.string(forKey: "sessionChimeFinished") ?? SessionChime.defaultFinished {
+        didSet { UserDefaults.standard.set(finishedChime, forKey: "sessionChimeFinished") }
+    }
+    @Published var waitingChime = UserDefaults.standard.string(forKey: "sessionChimeWaiting") ?? SessionChime.defaultWaiting {
+        didSet { UserDefaults.standard.set(waitingChime, forKey: "sessionChimeWaiting") }
+    }
+
+    func chime(for reason: SessionCompletionWatcher.Reason) -> String {
+        reason == .finished ? finishedChime : waitingChime
+    }
+
+    /// Plays the chosen sound for `reason` so the user can hear their pick in Settings.
+    func previewChime(_ reason: SessionCompletionWatcher.Reason) {
+        SessionChime.play(named: chime(for: reason))
+    }
     @Published private(set) var completionPeek: SessionCompletionWatcher.Event?
     private var completionPeekTask: Task<Void, Never>?
     private var isErasing = false
@@ -226,7 +242,7 @@ final class UsageStore: ObservableObject {
                 if let self {
                     let events = self.completionWatcher.absorb(found)
                     if let event = events.first {
-                        if self.sessionChimeEnabled { SessionChime.play(event.reason) }
+                        if self.sessionChimeEnabled { SessionChime.play(named: self.chime(for: event.reason)) }
                         if self.sessionPeekEnabled {
                             self.completionPeek = event
                             self.sessionCompletions.send(event)

@@ -1,6 +1,7 @@
 import SwiftUI
 
 private enum SettingsDestination: String, CaseIterable, Identifiable {
+    case general = "General"
     case providers = "Providers"
     case appearance = "Appearance"
     case diagnostics = "Diagnostics"
@@ -10,6 +11,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .general: "gearshape.fill"
         case .providers: "square.stack.3d.up.fill"
         case .appearance: "paintbrush.pointed.fill"
         case .diagnostics: "waveform.path.ecg"
@@ -30,6 +32,7 @@ private enum SettingsPalette {
     static let accent = Color(red: 0.27, green: 0.58, blue: 1.00)
     /// Native `.switch` toggles are avoided here; see `RailToggleStyle`.
     static let toggle = RailToggleStyle(glass: false, onColor: accent, width: 38, height: 22)
+    static let smallToggle = RailToggleStyle(glass: false, onColor: accent, width: 30, height: 18)
 }
 
 /// GaugeZ's standalone settings workspace.
@@ -48,6 +51,8 @@ struct SettingsView: View {
 
             Group {
                 switch destination {
+                case .general:
+                    GeneralSettingsPage(store: store)
                 case .providers:
                     ProvidersSettingsPage(store: store)
                 case .appearance:
@@ -75,7 +80,7 @@ struct SettingsView: View {
         .environmentObject(store)
         .preferredColorScheme(.dark)
         .tint(SettingsPalette.accent)
-        .frame(minWidth: 760, idealWidth: 820, minHeight: 540, idealHeight: 640)
+        .frame(minWidth: 900, idealWidth: 980, minHeight: 560, idealHeight: 680)
     }
 }
 
@@ -152,7 +157,7 @@ private struct SettingsSidebar: View {
             .padding(.top, 22)
             .padding(.bottom, 25)
 
-            Text("GENERAL")
+            Text("PREFERENCES")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1.2)
                 .foregroundStyle(SettingsPalette.tertiary)
@@ -279,7 +284,6 @@ private struct ProvidersSettingsPage: View {
 
             VStack(spacing: 10) {
                 ForEach(store.providerOrder) { provider in
-                    VStack(alignment: .trailing, spacing: 4) {
                     ProviderSettingsRow(
                         provider: provider,
                         snapshot: store.snapshot(for: provider),
@@ -287,24 +291,19 @@ private struct ProvidersSettingsPage: View {
                             get: { store.enabledProviders.contains(provider) },
                             set: { store.setProvider(provider, enabled: $0) }
                         ),
+                        alertsEnabled: Binding(
+                            get: { !store.mutedAlertProviders.contains(provider.rawValue) },
+                            set: { enabled in
+                                if enabled { store.mutedAlertProviders.remove(provider.rawValue) }
+                                else { store.mutedAlertProviders.insert(provider.rawValue) }
+                            }
+                        ),
                         claudeSource: $store.claudeSource,
+                        canMoveUp: store.providerOrder.first != provider,
+                        canMoveDown: store.providerOrder.last != provider,
+                        move: { store.moveProvider(provider, by: $0) },
                         openProvider: { store.open(provider) }
                     )
-                    HStack(spacing: 8) {
-                        Toggle("Usage alerts", isOn: Binding(get: { !store.mutedAlertProviders.contains(provider.rawValue) }, set: { enabled in
-                            if enabled { store.mutedAlertProviders.remove(provider.rawValue) }
-                            else { store.mutedAlertProviders.insert(provider.rawValue) }
-                        })).toggleStyle(.checkbox).help("Notify at 20% and 0% remaining")
-                        Spacer()
-                        Button { store.moveProvider(provider, by: -1) } label: { Label("Up", systemImage: "arrow.up") }
-                            .disabled(store.providerOrder.first == provider)
-                            .accessibilityLabel("Move \(provider.displayName) up in the rail")
-                        Button { store.moveProvider(provider, by: 1) } label: { Label("Down", systemImage: "arrow.down") }
-                            .disabled(store.providerOrder.last == provider)
-                            .accessibilityLabel("Move \(provider.displayName) down in the rail")
-                    }
-                    .font(.caption).buttonStyle(.borderless)
-                    }
                 }
             }
 
@@ -323,7 +322,11 @@ private struct ProviderSettingsRow: View {
     let provider: ProviderID
     let snapshot: UsageSnapshot
     @Binding var enabled: Bool
+    @Binding var alertsEnabled: Bool
     @Binding var claudeSource: ClaudeSource
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let move: (Int) -> Void
     let openProvider: () -> Void
 
     var body: some View {
@@ -385,6 +388,21 @@ private struct ProviderSettingsRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ALERTS")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(SettingsPalette.tertiary)
+                Toggle("Usage alerts for \(provider.displayName)", isOn: $alertsEnabled)
+                    .labelsHidden()
+                    .toggleStyle(SettingsPalette.smallToggle)
+                    .help("Notify at 20% and 0% remaining")
+                    .disabled(!enabled)
+            }
+            .padding(.trailing, 6)
+
+            reorderControls
+
             Button("Open", action: openProvider)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -401,6 +419,29 @@ private struct ProviderSettingsRow: View {
         .settingsCard()
         .opacity(enabled ? 1 : 0.62)
         .animation(.easeOut(duration: 0.18), value: enabled)
+    }
+
+    /// Stacked up/down chevrons that shift the provider's place in the rail.
+    private var reorderControls: some View {
+        VStack(spacing: 2) {
+            reorderButton(systemImage: "chevron.up", enabled: canMoveUp, label: "Move \(provider.displayName) up in the rail") { move(-1) }
+            reorderButton(systemImage: "chevron.down", enabled: canMoveDown, label: "Move \(provider.displayName) down in the rail") { move(1) }
+        }
+        .padding(.trailing, 2)
+    }
+
+    private func reorderButton(systemImage: String, enabled: Bool, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(enabled ? SettingsPalette.secondary : SettingsPalette.tertiary.opacity(0.5))
+                .frame(width: 22, height: 16)
+                .background(Color.white.opacity(enabled ? 0.07 : 0.03), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
     }
 
     private var statusTitle: String {
@@ -423,6 +464,94 @@ private struct ProviderSettingsRow: View {
     }
 }
 
+private struct GeneralSettingsPage: View {
+    @ObservedObject var store: UsageStore
+
+    var body: some View {
+        SettingsPageContainer {
+            SettingsPageHeader(
+                eyebrow: "APPLICATION",
+                title: "General",
+                subtitle: "How GaugeZ starts, where it shows itself, and how it follows your sessions."
+            )
+
+            SettingsGroup("Startup") {
+                SettingsControlRow(title: "Launch at login", subtitle: "Keep GaugeZ available after signing in") {
+                    Toggle("Launch at login", isOn: Binding(get: { store.launchAtLogin }, set: { store.setLaunchAtLogin($0) }))
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                if let problem = store.loginProblem {
+                    Text(problem).font(.caption).foregroundStyle(.orange).padding(12)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "App presence", subtitle: store.appPresence.explanation) {
+                    Picker("App presence", selection: $store.appPresence) {
+                        ForEach(AppPresence.allCases) { presence in Text(presence.title).tag(presence) }
+                    }
+                    .labelsHidden().frame(width: 130)
+                }
+            }
+
+            SettingsGroup("Sessions") {
+                SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local metadata. Codex and Antigravity states are inferred from recent writes.") {
+                    Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Session peek", subtitle: "Open the rail for five seconds when work finishes or needs input. Click its provider to raise the owning app.") {
+                    Toggle("Session peek", isOn: $store.sessionPeekEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Session sounds", subtitle: "Chime when a session finishes or needs input. Only reported sessions chime; inferred Codex and Antigravity activity never does.") {
+                    Toggle("Session sounds", isOn: $store.sessionChimeEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
+                }
+                if store.sessionChimeEnabled {
+                    SettingsRowDivider()
+                    ChimePickerRow(title: "Finished work", subtitle: "Plays when a session completes a turn", selection: $store.finishedChime) {
+                        store.previewChime(.finished)
+                    }
+                    SettingsRowDivider()
+                    ChimePickerRow(title: "Needs input", subtitle: "Plays when a session is waiting on you", selection: $store.waitingChime) {
+                        store.previewChime(.blocked)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A system-sound menu with a play button beside it, so a pick can be heard before it fires for real.
+private struct ChimePickerRow: View {
+    @EnvironmentObject private var store: UsageStore
+    let title: String
+    let subtitle: String
+    @Binding var selection: String
+    let preview: () -> Void
+
+    var body: some View {
+        SettingsControlRow(title: title, subtitle: subtitle) {
+            HStack(spacing: 8) {
+                Picker(title, selection: $selection) {
+                    ForEach(SessionChime.systemSounds, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+
+                Button(action: preview) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 14)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Play \(selection)")
+                .accessibilityLabel("Play \(selection)")
+            }
+            .disabled(!store.activityEnabled)
+        }
+        .padding(.leading, 16)
+    }
+}
+
 private struct AppearanceSettingsPage: View {
     @ObservedObject var store: UsageStore
 
@@ -431,202 +560,174 @@ private struct AppearanceSettingsPage: View {
             SettingsPageHeader(
                 eyebrow: "PERSONALIZATION",
                 title: "Appearance",
-                subtitle: "Tune how GaugeZ looks and behaves at the edge of your screen."
+                subtitle: "Where the rail lives on your screen and how it looks."
             )
 
-            VStack(spacing: 0) {
-                    SettingsControlRow(title: "Launch at login", subtitle: "Keep GaugeZ available after signing in") {
-                        Toggle("Launch at login", isOn: Binding(get: { store.launchAtLogin }, set: { store.setLaunchAtLogin($0) }))
-                            .labelsHidden().toggleStyle(SettingsPalette.toggle)
-                    }
-                    if let problem = store.loginProblem {
-                        Text(problem).font(.caption).foregroundStyle(.orange).padding(12)
-                    }
-                    SettingsRowDivider()
-                    SettingsControlRow(title: "App presence", subtitle: store.appPresence.explanation) {
-                        Picker("App presence", selection: $store.appPresence) {
-                            ForEach(AppPresence.allCases) { presence in Text(presence.title).tag(presence) }
+            SettingsGroup("Placement") {
+                SettingsControlRow(title: "Display", subtitle: "Returns to this display when it reconnects") {
+                    Picker("Display", selection: $store.selectedDisplayID) {
+                        ForEach(store.availableDisplays) { display in Text(display.name).tag(display.id) }
+                        if !store.availableDisplays.contains(where: { $0.id == store.selectedDisplayID }) {
+                            Text("Saved display (disconnected)").tag(store.selectedDisplayID)
                         }
-                        .labelsHidden().frame(width: 130)
                     }
-                    SettingsRowDivider()
-                    SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local metadata. Codex and Antigravity states are inferred from recent writes.") {
-                        Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
-                    }
-                    SettingsRowDivider()
-                    SettingsControlRow(title: "Session peek", subtitle: "Open the rail for five seconds when work finishes or needs input. Click its provider to raise the owning app.") {
-                        Toggle("Session peek", isOn: $store.sessionPeekEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
-                    }
-                    SettingsRowDivider()
-                    SettingsControlRow(title: "Session sounds", subtitle: "Glass for finished work; Funk when a session needs input. Only reported sessions chime; inferred Codex and Antigravity activity never does.") {
-                        Toggle("Session sounds", isOn: $store.sessionChimeEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
-                    }
-                    SettingsRowDivider()
-                    SettingsControlRow(title: "Display", subtitle: "Returns to this display when it reconnects") {
-                        Picker("Display", selection: $store.selectedDisplayID) {
-                            ForEach(store.availableDisplays) { display in Text(display.name).tag(display.id) }
-                            if !store.availableDisplays.contains(where: { $0.id == store.selectedDisplayID }) {
-                                Text("Saved display (disconnected)").tag(store.selectedDisplayID)
-                            }
+                    .labelsHidden().frame(width: 170)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Rail visibility", subtitle: "When the edge rail appears") {
+                    Picker("Rail visibility", selection: $store.displayMode) {
+                        ForEach(DisplayMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
                         }
-                        .labelsHidden().frame(width: 170)
                     }
-                    SettingsRowDivider()
-                    SettingsControlRow(
-                        title: "Rail visibility",
-                        subtitle: "When the edge rail appears"
-                    ) {
-                        Picker("Rail visibility", selection: $store.displayMode) {
-                            ForEach(DisplayMode.allCases) { mode in
-                                Text(mode.label).tag(mode)
-                            }
+                    .labelsHidden()
+                    .frame(width: 152)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Screen edge", subtitle: "Anchor GaugeZ to any screen edge") {
+                    Picker("Screen edge", selection: $store.edgeSide) {
+                        ForEach(EdgeSide.allCases) { edge in
+                            Text(edge.label).tag(edge)
                         }
-                        .labelsHidden()
-                        .frame(width: 152)
                     }
-
-                    SettingsRowDivider()
-
-                    SettingsControlRow(
-                        title: "Screen edge",
-                        subtitle: "Anchor GaugeZ to any screen edge"
-                    ) {
-                        Picker("Screen edge", selection: $store.edgeSide) {
-                            ForEach(EdgeSide.allCases) { edge in
-                                Text(edge.label).tag(edge)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        // Sized to its four segments; a fixed width sized for two overflowed the row.
-                        .fixedSize()
-                    }
-
-                    SettingsRowDivider()
-
-                    SettingsControlRow(
-                        title: store.edgeSide.isHorizontal ? "Horizontal position" : "Vertical position",
-                        subtitle: "Position along the screen edge"
-                    ) {
-                        HStack(spacing: 8) {
-                            Slider(
-                                value: $store.verticalPosition,
-                                in: 0...1
-                            )
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    // Sized to its four segments; a fixed width sized for two overflowed the row.
+                    .fixedSize()
+                }
+                SettingsRowDivider()
+                SettingsControlRow(
+                    title: store.edgeSide.isHorizontal ? "Horizontal position" : "Vertical position",
+                    subtitle: "Position along the screen edge"
+                ) {
+                    HStack(spacing: 8) {
+                        Slider(value: $store.verticalPosition, in: 0...1)
                             .frame(width: 120)
                             .controlSize(.small)
 
-                            Button("Center") {
-                                withAnimation(.spring(duration: 0.25, bounce: 0.15)) {
-                                    store.verticalPosition = 0.5
-                                }
+                        Button("Center") {
+                            withAnimation(.spring(duration: 0.25, bounce: 0.15)) {
+                                store.verticalPosition = 0.5
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(abs(store.verticalPosition - 0.5) < 0.005)
                         }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(abs(store.verticalPosition - 0.5) < 0.005)
                     }
+                }
+            }
 
-                    SettingsRowDivider()
-
-                    SettingsControlRow(
-                        title: "Notch size",
-                        subtitle: "Use the slider or drag the notch's inner edge"
-                    ) {
-                        HStack(spacing: 8) {
-                            Slider(
-                                value: $store.railScale,
-                                in: 0.70...1.40,
-                                step: 0.05
-                            )
+            SettingsGroup("Look") {
+                SettingsControlRow(title: "Notch size", subtitle: "Use the slider or drag the notch's inner edge") {
+                    HStack(spacing: 8) {
+                        Slider(value: $store.railScale, in: 0.70...1.40, step: 0.05)
                             .frame(width: 120)
                             .controlSize(.small)
 
-                            Text("\(Int(round(store.railScale * 100)))%")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(SettingsPalette.secondary)
-                                .frame(width: 38, alignment: .trailing)
+                        Text("\(Int(round(store.railScale * 100)))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(SettingsPalette.secondary)
+                            .frame(width: 38, alignment: .trailing)
 
-                            Button("Reset", action: store.resetRailScale)
+                        Button("Reset", action: store.resetRailScale)
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             .disabled(store.railScale == 1.0)
-                        }
                     }
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Surface", subtitle: "Choose the rail material") {
+                    Picker("Surface", selection: $store.glassEnabled) {
+                        Text("Glass").tag(true)
+                        Text("Solid").tag(false)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 142)
+                }
 
+                if store.glassEnabled {
                     SettingsRowDivider()
 
-                    SettingsControlRow(
-                        title: "Surface",
-                        subtitle: "Choose the rail material"
-                    ) {
-                        Picker("Surface", selection: $store.glassEnabled) {
-                            Text("Glass").tag(true)
-                            Text("Solid").tag(false)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(width: 142)
-                    }
-
-                    if store.glassEnabled {
-                        SettingsRowDivider()
-
-                        VStack(alignment: .leading, spacing: 11) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("Glass transparency")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(SettingsPalette.primary)
-                                    Text("Balance clarity and depth")
-                                        .font(.system(size: 10.5))
-                                        .foregroundStyle(SettingsPalette.tertiary)
-                                }
-                                Spacer()
-                                Text("\(transparencyPercent)%")
-                                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(SettingsPalette.secondary)
-                            }
-                            Slider(
-                                value: Binding(
-                                    get: { 1.0 - store.glassOpacity },
-                                    set: { store.glassOpacity = 1.0 - $0 }
-                                ),
-                                in: 0...1
-                            )
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                    }
-
-                    SettingsRowDivider()
-
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 11) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Indicator color")
+                                Text("Glass transparency")
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(SettingsPalette.primary)
-                                Text("Applied as a tonal spectrum")
+                                Text("Balance clarity and depth")
                                     .font(.system(size: 10.5))
                                     .foregroundStyle(SettingsPalette.tertiary)
                             }
                             Spacer()
-                            IndicatorSpectrum(colors: store.indicatorVariants)
+                            Text("\(transparencyPercent)%")
+                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(SettingsPalette.secondary)
                         }
-                        IndicatorColorPaletteView()
+                        Slider(
+                            value: Binding(
+                                get: { 1.0 - store.glassOpacity },
+                                set: { store.glassOpacity = 1.0 - $0 }
+                            ),
+                            in: 0...1
+                        )
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
+                }
+
+                SettingsRowDivider()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Indicator color")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(SettingsPalette.primary)
+                            Text("Applied as a tonal spectrum")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(SettingsPalette.tertiary)
+                        }
+                        Spacer()
+                        IndicatorSpectrum(colors: store.indicatorVariants)
+                    }
+                    IndicatorColorPaletteView()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
-            .frame(maxWidth: .infinity)
-            .settingsCard()
         }
     }
 
     private var transparencyPercent: Int {
         Int(round((1.0 - store.glassOpacity) * 100))
+    }
+}
+
+/// A titled card of settings rows.
+private struct SettingsGroup<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(SettingsPalette.tertiary)
+                .padding(.leading, 4)
+            VStack(spacing: 0) {
+                content
+            }
+            .frame(maxWidth: .infinity)
+            .settingsCard()
+        }
     }
 }
 
@@ -655,10 +756,6 @@ private struct DiagnosticsSettingsPage: View {
     @State private var confirmsErase = false
     @State private var eraseError: String?
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 245, maximum: 360), spacing: 14, alignment: .top)
-    ]
-
     var body: some View {
         SettingsPageContainer {
             SettingsPageHeader(
@@ -682,11 +779,14 @@ private struct DiagnosticsSettingsPage: View {
                 }
             if let eraseError { Text(eraseError).foregroundStyle(.red).font(.caption) }
 
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                ForEach(store.connectedProviders) { provider in
-                    DiagnosticsCard(snapshot: store.snapshot(for: provider))
+            VStack(spacing: 0) {
+                ForEach(Array(store.connectedProviders.enumerated()), id: \.element) { index, provider in
+                    if index > 0 { SettingsRowDivider() }
+                    DiagnosticsRow(snapshot: store.snapshot(for: provider))
                 }
             }
+            .frame(maxWidth: .infinity)
+            .settingsCard()
 
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "hand.raised.fill")
@@ -712,84 +812,71 @@ private struct DiagnosticsSettingsPage: View {
     }
 }
 
-private struct DiagnosticsCard: View {
+/// One provider in the diagnostics list: identity and health on the first line, where the
+/// reading came from on the second, and any note from the provider on a third.
+private struct DiagnosticsRow: View {
     @EnvironmentObject private var store: UsageStore
     let snapshot: UsageSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                ProviderLogo(provider: snapshot.provider, size: 18)
-                    .frame(width: 34, height: 34)
-                    .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                Text(snapshot.provider.displayName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(SettingsPalette.primary)
-                Spacer()
-                HealthBadge(health: snapshot.health)
-            }
+        HStack(alignment: .top, spacing: 12) {
+            ProviderLogo(provider: snapshot.provider, size: 16)
+                .frame(width: 30, height: 30)
+                .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-            VStack(spacing: 9) {
-                DiagnosticValue(label: "Source", value: snapshot.source)
-                if let retry = store.nextRetry(for: snapshot.provider) {
-                    DiagnosticValue(label: "Next retry", value: retry.formatted(date: .omitted, time: .standard))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(snapshot.provider.displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsPalette.primary)
+                    HealthBadge(health: snapshot.health)
                 }
-                if let window = snapshot.headlineWindow {
-                    DiagnosticValue(label: "Rail window", value: window.label)
-                }
-                if let plan = snapshot.planName {
-                    DiagnosticValue(label: "Plan", value: plan)
-                }
-                DiagnosticValue(
-                    label: "Observed",
-                    value: snapshot.observedAt.formatted(date: .abbreviated, time: .shortened)
-                )
-            }
 
-            if let error = store.actionErrors[snapshot.provider] {
-                Text(error).font(.caption).foregroundStyle(.orange)
-            }
-            if let message = snapshot.health.message {
-                Text(message)
+                Text(details.joined(separator: "  ·  "))
                     .font(.system(size: 10.5))
                     .foregroundStyle(SettingsPalette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 1)
+
+                if let error = store.actionErrors[snapshot.provider] {
+                    Text(error)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let message = snapshot.health.message {
+                    Text(message)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(SettingsPalette.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack {
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 12) {
                 Button("Retry") { store.retry(snapshot.provider) }
                     .disabled(!store.enabledProviders.contains(snapshot.provider) || store.refreshing.contains(snapshot.provider) || store.nextRetry(for: snapshot.provider) != nil)
                 Button("Open app") { store.open(snapshot.provider) }
-                Spacer()
                 Button("Forget reading") { store.forget(snapshot.provider) }
                     .help("Clears GaugeZ’s cached reading. The enabled provider can refresh again later.")
             }
-            .font(.caption).buttonStyle(.borderless)
+            .font(.caption)
+            .buttonStyle(.borderless)
+            .padding(.top, 7)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .settingsCard()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
-}
 
-private struct DiagnosticValue: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label)
-                .foregroundStyle(SettingsPalette.tertiary)
-            Spacer(minLength: 8)
-            Text(value)
-                .foregroundStyle(SettingsPalette.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(value)
+    private var details: [String] {
+        var parts = [snapshot.source]
+        if let window = snapshot.headlineWindow { parts.append(window.label) }
+        if let plan = snapshot.planName { parts.append(plan) }
+        if let retry = store.nextRetry(for: snapshot.provider) {
+            parts.append("Retry at " + retry.formatted(date: .omitted, time: .standard))
+        } else {
+            parts.append("Observed " + snapshot.observedAt.formatted(date: .abbreviated, time: .shortened))
         }
-        .font(.system(size: 10.5))
+        return parts
     }
 }
 

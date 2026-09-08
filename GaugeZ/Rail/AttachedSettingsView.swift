@@ -19,9 +19,6 @@ struct AttachedSettingsView: View {
                         Text(provider.displayName)
                             .font(.system(size: 12, weight: .medium))
                         Spacer()
-                        Button("Open") { store.open(provider) }
-                            .glassControl(enabled: store.glassEnabled)
-                            .controlSize(.mini)
                         Toggle(
                             "Enable \(provider.displayName)",
                             isOn: Binding(
@@ -35,89 +32,28 @@ struct AttachedSettingsView: View {
                 }
             }
 
-            settingRow("Claude") {
-                Picker("Claude source", selection: $store.claudeSource) {
-                    ForEach(ClaudeSource.allCases) { Text($0.label).tag($0) }
-                }
-            }
-
             settingRow("Show") {
                 Picker("Show", selection: $store.displayMode) {
                     ForEach(DisplayMode.allCases) { Text($0.label).tag($0) }
                 }
             }
 
-            // Four edge segments no longer fit beside the style picker in the card width,
-            // so the two rows stack; a side-by-side pair overflows and gets clipped.
+            // Set-once choices (Claude source, surface, notch size) live in the Settings window;
+            // the card keeps only what gets flipped in the moment.
             settingRow("Edge") {
                 Picker("Edge", selection: $store.edgeSide) {
                     ForEach(EdgeSide.allCases) { Text($0.label).tag($0) }
                 }
             }
 
-            settingRow("Style") {
-                StableStylePicker(
-                    isGlassEnabled: store.glassEnabled,
-                    onChange: { store.glassEnabled = $0 }
-                )
-                .equatable()
-            }
-
-            if store.glassEnabled {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Glass Transparency")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.55))
-                        Spacer()
-                        Text("\(Int(round((1.0 - store.glassOpacity) * 100)))%")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.55))
-                    }
-                    Slider(
-                        value: Binding(
-                            get: { 1.0 - store.glassOpacity },
-                            set: { store.glassOpacity = 1.0 - $0 }
-                        ),
-                        in: 0.0...1.0
-                    )
-                    .controlSize(.small)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
             indicatorColorBlock
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Notch Size")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.55))
-                    Spacer()
-                    Text("\(Int(round(store.railScale * 100)))%")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.55))
-                    if store.railScale != 1.0 {
-                        Button("Reset", action: store.resetRailScale)
-                        .buttonStyle(.plain)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(Color(red: 0.27, green: 0.58, blue: 1.00))
-                    }
-                }
-                Slider(
-                    value: $store.railScale,
-                    in: 0.70...1.40,
-                    step: 0.05
-                )
-                .controlSize(.small)
-            }
 
             GlassGroup(enabled: store.glassEnabled) {
                 HStack {
                     Button("Refresh", action: store.refresh)
                         .glassControl(enabled: store.glassEnabled)
                     Spacer()
-                    Button("Diagnostics…") {
+                    Button("Preferences…") {
                         NotificationCenter.default.post(name: .gaugezOpenSettings, object: nil)
                     }
                     .glassControl(enabled: store.glassEnabled)
@@ -186,57 +122,6 @@ struct AttachedSettingsView: View {
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// Configure the native segmented control completely before its first layout. SwiftUI's Picker
-/// wrapper initially reports a narrower intrinsic width, then expands the first time any bound
-/// setting changes. It also redraws its selected segment during every opacity update.
-private struct StableStylePicker: NSViewRepresentable, Equatable {
-    let isGlassEnabled: Bool
-    let onChange: (Bool) -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.isGlassEnabled == rhs.isGlassEnabled
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onChange: onChange)
-    }
-
-    func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(
-            labels: ["Liquid Glass", "Solid"],
-            trackingMode: .selectOne,
-            target: context.coordinator,
-            action: #selector(Coordinator.selectionChanged(_:))
-        )
-        control.segmentDistribution = .fillEqually
-        control.controlSize = .small
-        control.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
-        control.selectedSegment = isGlassEnabled ? 0 : 1
-        control.setAccessibilityLabel("Style")
-        return control
-    }
-
-    func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        context.coordinator.onChange = onChange
-        let selectedSegment = isGlassEnabled ? 0 : 1
-        if control.selectedSegment != selectedSegment {
-            control.selectedSegment = selectedSegment
-        }
-    }
-
-    final class Coordinator: NSObject {
-        var onChange: (Bool) -> Void
-
-        init(onChange: @escaping (Bool) -> Void) {
-            self.onChange = onChange
-        }
-
-        @objc func selectionChanged(_ sender: NSSegmentedControl) {
-            onChange(sender.selectedSegment == 0)
-        }
     }
 }
 

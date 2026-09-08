@@ -24,6 +24,20 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.8",
+            headline: "Settings, sorted.",
+            changes: [
+                .init("A General page",
+                      "Launch at login, app presence, and session options have their own page. Appearance now covers only the rail."),
+                .init("A leaner quick settings card",
+                      "The rail's card keeps providers, visibility, edge, and color. Everything set once lives in Preferences."),
+                .init("Pick your session sounds",
+                      "Choose a sound for finished work and another for needs input, and preview each before it fires."),
+                .init("Diagnostics as a list",
+                      "Providers are rows instead of uneven cards, and usage alerts sit inside each provider row.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.7",
             headline: "The notch is yours to size.",
             changes: [

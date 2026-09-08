@@ -222,8 +222,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 820, height: 640))
-        window.minSize = NSSize(width: 760, height: 540)
+        window.setContentSize(NSSize(width: 980, height: 680))
+        window.minSize = NSSize(width: 900, height: 560)
         window.backgroundColor = NSColor(red: 0.048, green: 0.055, blue: 0.071, alpha: 1)
         return window
     }
