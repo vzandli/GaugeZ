@@ -3,10 +3,8 @@ import Foundation
 /// Reads Antigravity model quotas from the language server that a running Antigravity app or
 /// Antigravity IDE hosts on 127.0.0.1.
 ///
-/// Nothing leaves the machine: GaugeZ finds the local server process, reads the CSRF token it
-/// was launched with, and asks it for the same quota summary the IDE's own usage panel shows.
-/// Antigravity's stored Google login is never read or replayed. When Antigravity is not running
-/// the provider reports that honestly and the store keeps the last values marked stale.
+/// Falls back to Google's quota endpoint using the stored Antigravity sign-in, then to
+/// an explicitly derived local model-turn count when no quota is available.
 actor AntigravityUsageProvider: UsageProviding {
     static let bundleIdentifiers = ["com.google.antigravity", "com.google.antigravity-ide"]
     private static let quotaSummaryPath = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
@@ -15,7 +13,19 @@ actor AntigravityUsageProvider: UsageProviding {
     private let delegate = LocalhostTrustDelegate()
     private let session: URLSession
 
-    init() {
+    private let localOverride: (@Sendable () async throws -> UsageSnapshot)?
+    private let loadCredentials: @Sendable () throws -> AntigravityCredentials
+    private let readActivity: @Sendable () -> AntigravityActivity
+    init(remoteSession: URLSession = URLSession(configuration: .ephemeral),
+         retryPolicy: ProviderRetryPolicy = ProviderRetryPolicy(provider: .antigravity),
+         localQuota: (@Sendable () async throws -> UsageSnapshot)? = nil,
+         loadCredentials: @escaping @Sendable () throws -> AntigravityCredentials = { try AntigravityCredentials.load() },
+         readActivity: @escaping @Sendable () -> AntigravityActivity = { AntigravityActivity.read() }) {
+        self.remoteSession = remoteSession
+        self.retryPolicy = retryPolicy
+        self.localOverride = localQuota
+        self.loadCredentials = loadCredentials
+        self.readActivity = readActivity
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 6
         configuration.waitsForConnectivity = false
@@ -23,7 +33,59 @@ actor AntigravityUsageProvider: UsageProviding {
         session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
+    nonisolated func forgetCredentials() { AntigravityCredentials.forgetCached() }
+    private let remoteSession: URLSession
+    private let retryPolicy: ProviderRetryPolicy
+    /// The access token Google last answered 403 for. A personal account is refused every time,
+    /// so the endpoint is not asked again until Antigravity rotates the token, which is also
+    /// the earliest moment a newly licensed account could answer differently.
+    private var refusedToken: String?
+
     func fetchSnapshot() async throws -> UsageSnapshot {
+        do {
+            if let localOverride { return try await localOverride() }
+            return try await fetchLocalSnapshot()
+        }
+        catch is CancellationError { throw CancellationError() }
+        catch {
+            try Task.checkCancellation()
+            do { return try await fetchRemoteSnapshot() }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                try Task.checkCancellation()
+                let activity = readActivity()
+                guard activity.lastRequest != nil else { throw error }
+                return UsageSnapshot(provider: .antigravity, accountID: nil, planName: nil, windows: [],
+                                     observedAt: .now, source: "Derived from local transcripts · quota unavailable",
+                                     health: .live, derivedRequestCount: activity.requestsToday)
+            }
+        }
+    }
+
+    private func fetchRemoteSnapshot() async throws -> UsageSnapshot {
+        try retryPolicy.check()
+        let credentials = try loadCredentials()
+        guard !credentials.isExpired else { throw SecretError.missing("Antigravity (sign-in expired)") }
+        if credentials.accessToken == refusedToken { throw AntigravityProviderError.unexpectedStatus(403) }
+        var request = URLRequest(url: URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")!)
+        request.httpMethod = "POST"
+        request.httpBody = Data("{}".utf8)
+        request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        let (data, response) = try await remoteSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw AntigravityProviderError.malformedResponse }
+        if http.statusCode == 429 { throw retryPolicy.throttled(response: http) }
+        if http.statusCode == 403 { refusedToken = credentials.accessToken }
+        guard http.statusCode == 200 else { throw AntigravityProviderError.unexpectedStatus(http.statusCode) }
+        refusedToken = nil
+        let windows = try AntigravityQuotaParser.remoteWindows(from: data)
+        retryPolicy.succeeded()
+        return UsageSnapshot(provider: .antigravity, accountID: nil, planName: credentials.authMethod,
+                             windows: windows, observedAt: .now, source: "Google Cloud Code quota", health: .live)
+    }
+
+    private func fetchLocalSnapshot() async throws -> UsageSnapshot {
         let servers = try AntigravityProcessLocator.runningServers()
         guard !servers.isEmpty else {
             throw AntigravityProviderError.notRunning(installed: AntigravityProcessLocator.isInstalled)
@@ -254,7 +316,7 @@ enum AntigravityQuotaParser {
                 windows.append(UsageWindow(
                     id: "antigravity-\(bucketID)",
                     label: "\(groupName) \(cadence.label)".trimmingCharacters(in: .whitespaces),
-                    usedPercent: Int(((1 - min(1, max(0, fraction))) * 100).rounded()),
+                    usedPercent: (1 - min(1, max(0, fraction))) * 100,
                     resetsAt: (bucket["resetTime"] as? String).flatMap(parseDate),
                     durationMinutes: cadence.minutes
                 ))
@@ -264,6 +326,28 @@ enum AntigravityQuotaParser {
         return windows.sorted { lhs, rhs in
             (lhs.durationMinutes ?? .max, lhs.label) < (rhs.durationMinutes ?? .max, rhs.label)
         }
+    }
+
+    /// The direct endpoint has shipped both local-style groups and flat usage/limit buckets.
+    static func remoteWindows(from data: Data) throws -> [UsageWindow] {
+        if let local = try? windows(fromQuotaSummary: data) { return local }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AntigravityProviderError.malformedResponse
+        }
+        let groups = root["quotaGroups"] as? [[String: Any]] ?? []
+        let buckets = (root["buckets"] as? [[String: Any]] ?? []) + groups.flatMap { $0["buckets"] as? [[String: Any]] ?? [] }
+        var seen: Set<String> = []
+        let windows = buckets.compactMap { bucket -> UsageWindow? in
+            guard let limit = (bucket["limit"] as? NSNumber)?.doubleValue, limit.isFinite, limit > 0,
+                  let used = (bucket["used"] as? NSNumber)?.doubleValue, used.isFinite, used >= 0, used <= limit * 1.5,
+                  let name = bucket["name"] as? String ?? bucket["displayName"] as? String, !name.isEmpty,
+                  seen.insert(name).inserted else { return nil }
+            return UsageWindow(id: "antigravity-" + name, label: bucket["displayName"] as? String ?? name,
+                               usedPercent: min(100, used / limit * 100),
+                               resetsAt: (bucket["resetTime"] as? String).flatMap(parseDate), durationMinutes: nil)
+        }
+        guard !windows.isEmpty else { throw AntigravityProviderError.noQuotaBuckets }
+        return windows
     }
 
     /// `GetUserStatus`: account email and plan tier.

@@ -291,6 +291,11 @@ private struct ProvidersSettingsPage: View {
                         openProvider: { store.open(provider) }
                     )
                     HStack(spacing: 8) {
+                        Toggle("Usage alerts", isOn: Binding(get: { !store.mutedAlertProviders.contains(provider.rawValue) }, set: { enabled in
+                            if enabled { store.mutedAlertProviders.remove(provider.rawValue) }
+                            else { store.mutedAlertProviders.insert(provider.rawValue) }
+                        })).toggleStyle(.checkbox).help("Notify at 20% and 0% remaining")
+                        Spacer()
                         Button { store.moveProvider(provider, by: -1) } label: { Label("Up", systemImage: "arrow.up") }
                             .disabled(store.providerOrder.first == provider)
                             .accessibilityLabel("Move \(provider.displayName) up in the rail")
@@ -401,7 +406,7 @@ private struct ProviderSettingsRow: View {
     private var statusTitle: String {
         guard enabled else { return "Not shown in rail" }
         if let remaining = snapshot.remainingPercent {
-            return "\(remaining)% remaining"
+            return "\(PercentCopy.text(remaining))% remaining"
         }
         return snapshot.health.shortLabel
     }
@@ -447,6 +452,14 @@ private struct AppearanceSettingsPage: View {
                     SettingsRowDivider()
                     SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local metadata. Codex and Antigravity states are inferred from recent writes.") {
                         Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
+                    }
+                    SettingsRowDivider()
+                    SettingsControlRow(title: "Session peek", subtitle: "Open the rail for five seconds when work finishes or needs input. Click its provider to raise the owning app.") {
+                        Toggle("Session peek", isOn: $store.sessionPeekEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
+                    }
+                    SettingsRowDivider()
+                    SettingsControlRow(title: "Session sounds", subtitle: "Glass for finished work; Funk when a session needs input. Only reported sessions chime; inferred Codex and Antigravity activity never does.") {
+                        Toggle("Session sounds", isOn: $store.sessionChimeEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
                     }
                     SettingsRowDivider()
                     SettingsControlRow(title: "Display", subtitle: "Returns to this display when it reconnects") {
@@ -612,6 +625,8 @@ private struct IndicatorSpectrum: View {
 
 private struct DiagnosticsSettingsPage: View {
     @ObservedObject var store: UsageStore
+    @State private var confirmsErase = false
+    @State private var eraseError: String?
 
     private let columns = [
         GridItem(.adaptive(minimum: 245, maximum: 360), spacing: 14, alignment: .top)
@@ -629,6 +644,16 @@ private struct DiagnosticsSettingsPage: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            Button("Erase all data and quit…", role: .destructive) { confirmsErase = true }
+                .confirmationDialog("Erase GaugeZ data and quit?", isPresented: $confirmsErase) {
+                    Button("Erase all data and quit", role: .destructive) {
+                        Task { do { try await store.eraseAllDataAndQuit() } catch { eraseError = error.localizedDescription } }
+                    }
+                } message: {
+                    Text("Removes GaugeZ settings, cached readings, and launch-at-login registration. Your provider accounts and credentials stay in their own apps.")
+                }
+            if let eraseError { Text(eraseError).foregroundStyle(.red).font(.caption) }
 
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                 ForEach(store.connectedProviders) { provider in

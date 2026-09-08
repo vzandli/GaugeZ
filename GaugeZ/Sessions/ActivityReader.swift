@@ -18,10 +18,12 @@ struct ActivitySession: Identifiable, Equatable, Sendable {
     /// When the reported state began, or the last evidence of it.
     let since: Date?
     /// The state was inferred from recent writes rather than reported by the tool.
+    let pid: Int32?
+    let processStartedAt: Date?
     let isInferred: Bool
 
     init(id: String, provider: ProviderID, name: String, project: String, state: State,
-         waitingReason: String?, since: Date? = nil, isInferred: Bool = false) {
+         waitingReason: String?, since: Date? = nil, isInferred: Bool = false, pid: Int32? = nil, processStartedAt: Date? = nil) {
         self.id = id
         self.provider = provider
         self.name = name
@@ -30,6 +32,8 @@ struct ActivitySession: Identifiable, Equatable, Sendable {
         self.waitingReason = waitingReason
         self.since = since
         self.isInferred = isInferred
+        self.pid = pid
+        self.processStartedAt = processStartedAt
     }
 }
 
@@ -78,7 +82,7 @@ actor ActivityReader {
                                    name: String((record["name"] as? String ?? project).prefix(100)),
                                    project: project, state: state,
                                    waitingReason: (record["waitingFor"] as? String ?? record["needs"] as? String).map { String($0.prefix(160)) },
-                                   since: since)
+                                   since: since, pid: pid, processStartedAt: processStart)
         }.sorted {
             let rank: [ActivitySession.State: Int] = [.waiting: 0, .working: 1, .unknown: 2, .idle: 3]
             if rank[$0.state] != rank[$1.state] { return rank[$0.state, default: 3] < rank[$1.state, default: 3] }
@@ -87,7 +91,7 @@ actor ActivityReader {
     }
 
     /// Read-only SQLite with WAL support: immutable mode would miss recent agent writes.
-    func readCursorSessions(launchedAt: Date?, store: URL = CursorLocalSession.stateDatabaseURL) -> [ActivitySession] {
+    func readCursorSessions(launchedAt: Date?, store: URL = CursorLocalSession.stateDatabaseURL, includeIdle: Bool = false) -> [ActivitySession] {
         guard launchedAt != nil, let db = ReadOnlySQLite.open(path: store.path) else { return [] }
         defer { sqlite3_close(db) }
         var statement: OpaquePointer?
@@ -98,7 +102,7 @@ actor ActivityReader {
         while !Task.isCancelled, sqlite3_step(statement) == SQLITE_ROW {
             guard sqlite3_column_bytes(statement, 0) < 65_536,
                   let text = sqlite3_column_text(statement, 0),
-                  let session = CursorActivityParser.session(from: Data(String(cString: text).utf8), launchedAt: launchedAt)
+                  let session = CursorActivityParser.session(from: Data(String(cString: text).utf8), launchedAt: launchedAt, includeIdle: includeIdle)
             else { continue }
             sessions.append(session)
         }
@@ -155,7 +159,7 @@ actor ActivityReader {
                 project: project,
                 state: state,
                 waitingReason: nil,
-                since: since
+                since: since, pid: pid, processStartedAt: processStart
             )
         }
         return Self.prioritized(sessions)
@@ -193,7 +197,7 @@ actor ActivityReader {
     /// ago, so it errs short, and the row is labeled as inferred.
     static let codexStaleAfter: TimeInterval = 8
 
-    func readCodexSessions(codexHome: URL = ActivityReader.codexHome(), now: Date = .now) -> [ActivitySession] {
+    func readCodexSessions(codexHome: URL = ActivityReader.codexHome(), now: Date = .now, includeIdle: Bool = false) -> [ActivitySession] {
         var candidates: [(id: String, name: String, at: Date)] = []
         if let rollout = Self.newestCodexRollout(in: codexHome),
            let modified = (try? rollout.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
@@ -203,9 +207,9 @@ actor ActivityReader {
             candidates.append(("codex-desktop", thread.title, thread.updatedAt))
         }
         guard let newest = candidates.max(by: { $0.at < $1.at }),
-              now.timeIntervalSince(newest.at) <= Self.codexStaleAfter else { return [] }
+              now.timeIntervalSince(newest.at) <= (includeIdle ? 900 : Self.codexStaleAfter) else { return [] }
         return [ActivitySession(id: newest.id, provider: .codex, name: String(newest.name.prefix(100)), project: "Codex",
-                                state: .working, waitingReason: nil, since: newest.at, isInferred: true)]
+                                state: now.timeIntervalSince(newest.at) <= Self.codexStaleAfter ? .working : .idle, waitingReason: nil, since: newest.at, isInferred: true)]
     }
 
     static func codexHome(home: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -252,7 +256,7 @@ actor ActivityReader {
         home.appendingPathComponent(".gemini/antigravity/brain")
     }
 
-    func readAntigravitySessions(root: URL = ActivityReader.antigravityTranscriptRoot(), now: Date = .now) -> [ActivitySession] {
+    func readAntigravitySessions(root: URL = ActivityReader.antigravityTranscriptRoot(), now: Date = .now, includeIdle: Bool = false) -> [ActivitySession] {
         guard let trajectories = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil,
                                                                               options: .skipsHiddenFiles) else { return [] }
         var newest: (id: String, modified: Date)?
@@ -264,9 +268,9 @@ actor ActivityReader {
                 newest = (trajectory.lastPathComponent, modified)
             }
         }
-        guard let newest, now.timeIntervalSince(newest.modified) <= Self.antigravityStaleAfter else { return [] }
+        guard let newest, now.timeIntervalSince(newest.modified) <= (includeIdle ? 900 : Self.antigravityStaleAfter) else { return [] }
         return [ActivitySession(id: "antigravity-\(newest.id)", provider: .antigravity, name: "Antigravity", project: "Antigravity",
-                                state: .working, waitingReason: nil, since: newest.modified, isInferred: true)]
+                                state: now.timeIntervalSince(newest.modified) <= Self.antigravityStaleAfter ? .working : .idle, waitingReason: nil, since: newest.modified, isInferred: true)]
     }
 
     static func prioritized(_ sessions: [ActivitySession]) -> [ActivitySession] {
@@ -277,7 +281,7 @@ actor ActivityReader {
         }
     }
 
-    private static func processStart(_ pid: Int32) -> Date? {
+    nonisolated static func processStart(_ pid: Int32) -> Date? {
         var process = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
         var query: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
@@ -328,7 +332,7 @@ enum ReadOnlySQLite {
 /// together with the editor's lifetime, are the evidence that an unfinished run is still working.
 enum CursorActivityParser {
     static func session(from data: Data, launchedAt: Date?, now: Date = .now,
-                        staleAfter: TimeInterval = 15 * 60) -> ActivitySession? {
+                        staleAfter: TimeInterval = 15 * 60, includeIdle: Bool = false) -> ActivitySession? {
         guard let launchedAt,
               let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = row["composerId"] as? String, !id.isEmpty else { return nil }
@@ -338,14 +342,15 @@ enum CursorActivityParser {
         let working = run != nil && touched.map {
             $0 >= launchedAt && $0 <= now.addingTimeInterval(5) && now.timeIntervalSince($0) <= staleAfter
         } == true
-        guard blocked || working else { return nil }
+        let recentlyFinished = includeIdle && run == nil && touched.map { $0 >= launchedAt && now.timeIntervalSince($0) <= staleAfter } == true
+        guard blocked || working || recentlyFinished else { return nil }
         // `unfinishedRunAt` is the chat's creation time, so it dates a working row from when the
         // chat began; a row that is merely waiting must not borrow it.
         let since = (working && !blocked ? run : nil) ?? touched ?? date(row["createdAt"])
         return ActivitySession(id: "cursor-\(id)", provider: .cursor,
                                name: String((row["name"] as? String ?? "Untitled chat").prefix(100)),
                                project: String((row["subtitle"] as? String ?? "Cursor").prefix(160)),
-                               state: blocked ? .waiting : .working,
+                               state: blocked ? .waiting : working ? .working : .idle,
                                waitingReason: blocked ? "Needs your input" : nil,
                                since: since)
     }

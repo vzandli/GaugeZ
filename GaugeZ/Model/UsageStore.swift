@@ -5,6 +5,7 @@ import os
 import SwiftUI
 import ServiceManagement
 import Network
+import UserNotifications
 
 @MainActor
 final class UsageStore: ObservableObject {
@@ -72,6 +73,21 @@ final class UsageStore: ObservableObject {
             configureActivity()
         }
     }
+    @Published var mutedAlertProviders = Set(UserDefaults.standard.stringArray(forKey: "mutedAlertProviders") ?? []) {
+        didSet { UserDefaults.standard.set(Array(mutedAlertProviders), forKey: "mutedAlertProviders") }
+    }
+    @Published var sessionPeekEnabled = UserDefaults.standard.object(forKey: "sessionPeekEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(sessionPeekEnabled, forKey: "sessionPeekEnabled") }
+    }
+    @Published var sessionChimeEnabled = UserDefaults.standard.object(forKey: "sessionChimeEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(sessionChimeEnabled, forKey: "sessionChimeEnabled") }
+    }
+    @Published private(set) var completionPeek: SessionCompletionWatcher.Event?
+    private var completionPeekTask: Task<Void, Never>?
+    private var isErasing = false
+    let sessionCompletions = PassthroughSubject<SessionCompletionWatcher.Event, Never>()
+    private var completionWatcher = SessionCompletionWatcher()
+    private var thresholdNotifier = ThresholdNotifier()
     @Published private(set) var sessions: [ActivitySession] = []
     @Published private(set) var refreshing: Set<ProviderID> = []
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -79,7 +95,8 @@ final class UsageStore: ObservableObject {
     @Published private(set) var actionErrors: [ProviderID: String] = [:]
     @Published private(set) var availableDisplays: [DisplayChoice] = DisplayChoice.current()
     @Published private(set) var clock = Date()
-    var railIsExpanded = false
+    var expandedPanels: Set<UUID> = []
+    var railIsExpanded: Bool { !expandedPanels.isEmpty }
     private var activityTask: Task<Void, Never>?
     private let activityReader = ActivityReader()
     private let networkMonitor = NWPathMonitor()
@@ -98,6 +115,44 @@ final class UsageStore: ObservableObject {
             loginProblem = "macOS could not update the login item. Move GaugeZ to Applications and try again."
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    /// Stops writers before clearing GaugeZ-owned state. Provider credentials belong to their apps.
+    func eraseAllDataAndQuit() async throws {
+        guard !isErasing else { return }
+        isErasing = true
+        defer { isErasing = false }
+        do { try await eraseData() }
+        catch {
+            startPeriodicRefresh()
+            configureActivity()
+            throw error
+        }
+    }
+
+    private func eraseData() async throws {
+        if SMAppService.mainApp.status == .enabled { try await SMAppService.mainApp.unregister() }
+        periodicTask?.cancel()
+        activityTask?.cancel()
+        completionPeekTask?.cancel()
+        ThresholdAlerts.shared.cancel()
+        for task in refreshTasks.values { task.cancel() }
+        for task in delayedRefreshes.values { task.cancel() }
+        for adapter in providers.values { adapter.forgetCredentials() }
+        for task in refreshTasks.values { await task.value }
+        try SnapshotCache.erase()
+        URLCache.shared.removeAllCachedResponses()
+        let fm = FileManager.default
+        if let bundleID = Bundle.main.bundleIdentifier {
+            for directory in [fm.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent(bundleID),
+                              fm.urls(for: .libraryDirectory, in: .userDomainMask).first?.appendingPathComponent("Saved Application State/" + bundleID + ".savedState")] {
+                if let directory, fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
+            }
+            UserDefaults.standard.removePersistentDomain(forName: bundleID)
+        }
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        NSApp.terminate(nil)
     }
 
     func updateSystemSettings() {
@@ -119,6 +174,9 @@ final class UsageStore: ObservableObject {
     private func configureActivity() {
         activityTask?.cancel()
         sessions = []
+        completionWatcher = SessionCompletionWatcher()
+        completionPeekTask?.cancel()
+        completionPeek = nil
         guard !isPreview, activityEnabled, enabledProviders.contains(where: \.supportsActivity) else { return }
         activityTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -133,8 +191,10 @@ final class UsageStore: ObservableObject {
                         $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92" || $0.bundleURL?.lastPathComponent == "Cursor.app"
                     }
                     let launchedAt = app.map { $0.launchDate ?? .distantPast }
-                    found += await reader.readCursorSessions(launchedAt: launchedAt)
+                    found += await reader.readCursorSessions(launchedAt: launchedAt, includeIdle: true)
                 }
+                // Codex and Antigravity are inferred from write recency: an eight-second pause is
+                // a think, not a finish, so they never become idle and never announce completion.
                 if enabled.contains(.codex) {
                     found += await reader.readCodexSessions()
                 }
@@ -146,7 +206,26 @@ final class UsageStore: ObservableObject {
                 }
                 found = ActivityReader.prioritized(found)
                 guard !Task.isCancelled else { return }
-                if self?.sessions != found { self?.sessions = found }
+                if let self {
+                    let events = self.completionWatcher.absorb(found)
+                    if let event = events.first {
+                        if self.sessionChimeEnabled { SessionChime.play(event.reason) }
+                        if self.sessionPeekEnabled {
+                            self.completionPeek = event
+                            self.sessionCompletions.send(event)
+                            self.completionPeekTask?.cancel()
+                            self.completionPeekTask = Task { [weak self] in
+                                try? await Task.sleep(for: .seconds(5))
+                                guard !Task.isCancelled else { return }
+                                self?.completionPeek = nil
+                            }
+                        }
+                    }
+                    // Idle Cursor chats exist only so the watcher can see a run end; the card
+                    // keeps showing working and waiting chats, as it always has.
+                    let shown = found.filter { !($0.provider == .cursor && $0.state == .idle) }
+                    if self.sessions != shown { self.sessions = shown }
+                }
                 try? await Task.sleep(for: .seconds(5))
             }
         }
@@ -173,6 +252,8 @@ final class UsageStore: ObservableObject {
         providers[provider]?.forgetCredentials()
         snapshots[provider] = .placeholder(for: provider)
         actionErrors[provider] = nil
+        // The next reading after a forget or re-enable is a fresh fact, so it may alert again.
+        thresholdNotifier.forget(provider)
         SnapshotCache.save(Array(snapshots.values))
     }
 
@@ -232,7 +313,7 @@ final class UsageStore: ObservableObject {
         }
         providers = [.codex: CodexUsageProvider(), .cursor: CursorUsageProvider(),
                      .antigravity: AntigravityUsageProvider(), .glm: GLMUsageProvider(), .grok: GrokUsageProvider(),
-                     .opencode: OpenCodeUsageProvider()]
+                     .opencode: OpenCodeUsageProvider(), .copilot: GitHubCopilotProvider()]
         for profile in profiles {
             providers[profile.provider] = ClaudeUsageProvider(profile: profile, selectedSource: {
                 ClaudeSource(rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? "") ?? .desktop
@@ -280,7 +361,7 @@ final class UsageStore: ObservableObject {
             snapshots = Dictionary(uniqueKeysWithValues: available.enumerated().map { index, provider in
                 (provider, UsageSnapshot(provider: provider, accountID: nil, planName: "Preview plan",
                     windows: [
-                        UsageWindow(id: "session", label: "5-hour limit", usedPercent: index == 2 ? 100 : (20 + index * 15) % 100,
+                        UsageWindow(id: "session", label: "5-hour limit", usedPercent: provider == .copilot ? 99.7 : index == 2 ? 100 : Double((20 + index * 15) % 100),
                                     resetsAt: Date().addingTimeInterval(3600), durationMinutes: 300),
                         UsageWindow(id: "weekly", label: "Weekly limit", usedPercent: 35,
                                     resetsAt: Date().addingTimeInterval(172800), durationMinutes: 10080)
@@ -329,7 +410,9 @@ final class UsageStore: ObservableObject {
     @Published var railPage = 0
 
     var railPageCapacity: Int {
-        let screen = NSScreen.screens.first { DisplayChoice.identifier(for: $0) == selectedDisplayID } ?? NSScreen.screens.first
+        let screen = selectedDisplayID == "all" ? NSScreen.screens.min {
+            (edgeSide.isHorizontal ? $0.visibleFrame.width : $0.visibleFrame.height) < (edgeSide.isHorizontal ? $1.visibleFrame.width : $1.visibleFrame.height)
+        } : NSScreen.screens.first { DisplayChoice.identifier(for: $0) == selectedDisplayID } ?? NSScreen.screens.first
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
         let length = (edgeSide.isHorizontal ? frame.width : frame.height) - 24
         let fixed = RailMetrics.shapeHeight(providerCount: 1) - RailMetrics.rowHeight
@@ -349,7 +432,7 @@ final class UsageStore: ObservableObject {
 
     func snapshot(for provider: ProviderID) -> UsageSnapshot {
         var value = snapshots[provider] ?? .placeholder(for: provider)
-        value.headlineWindowID = headlineWindows[provider.rawValue]
+        value.headlineWindowID = headlineWindows[provider.rawValue] ?? value.headlineWindowID
         return value
     }
 
@@ -384,7 +467,7 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(_ provider: ProviderID) {
-        guard !isPreview, let adapter = providers[provider], enabledProviders.contains(provider), refreshTasks[provider] == nil else { return }
+        guard !isErasing, !isPreview, let adapter = providers[provider], enabledProviders.contains(provider), refreshTasks[provider] == nil else { return }
         // A backoff deadline only matters when a network fetch is the sole source of data:
         // the provider itself declines the request, and a source with a local fallback
         // (e.g. the Claude Desktop usage log) can still return a reading.
@@ -458,7 +541,13 @@ final class UsageStore: ObservableObject {
             guard !Task.isCancelled else { return }
             Self.note("\(provider.displayName) refreshed: \(snapshot.health.shortLabel), \(snapshot.windows.count) windows via \(snapshot.source)")
             lastRefreshSucceeded[provider] = .now
-            snapshots[provider] = snapshot
+            if snapshot.derivedRequestCount != nil, !previous.windows.isEmpty {
+                snapshots[provider] = previous.withHealth(.stale("Quota unavailable. Derived locally: \(snapshot.derivedRequestCount!) model turns today."))
+            } else {
+                snapshots[provider] = snapshot
+            }
+            let alerts = thresholdNotifier.observe(self.snapshot(for: provider), muted: mutedAlertProviders.contains(provider.rawValue))
+            ThresholdAlerts.shared.deliver(alerts)
             SnapshotCache.save(Array(snapshots.values))
         } catch is CancellationError {
             return
@@ -509,6 +598,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func startPeriodicRefresh() {
+        periodicTask?.cancel()
         periodicTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
@@ -614,14 +704,16 @@ enum SnapshotCache {
         let observedAt: Date
         let source: String
         let costInfo: ProviderCostInfo?
+        let headlineWindowID: String?
 
-        init(provider: ProviderID, planName: String?, windows: [UsageWindow], observedAt: Date, source: String, costInfo: ProviderCostInfo? = nil) {
+        init(provider: ProviderID, planName: String?, windows: [UsageWindow], observedAt: Date, source: String, costInfo: ProviderCostInfo? = nil, headlineWindowID: String? = nil) {
             self.provider = provider
             self.planName = planName
             self.windows = windows
             self.observedAt = observedAt
             self.source = source
             self.costInfo = costInfo
+            self.headlineWindowID = headlineWindowID
         }
     }
 
@@ -631,6 +723,11 @@ enum SnapshotCache {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return base.appendingPathComponent("GaugeZ", isDirectory: true).appendingPathComponent("last-snapshots.json")
+    }
+
+    static func erase() throws {
+        let directory = fileURL.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
     }
 
     static func load() -> [UsageSnapshot] {
@@ -646,7 +743,7 @@ enum SnapshotCache {
                 observedAt: entry.observedAt,
                 source: entry.source,
                 health: .stale(staleMessage),
-                costInfo: entry.costInfo
+                costInfo: entry.costInfo, headlineWindowID: entry.headlineWindowID
             )
         }
     }
@@ -655,7 +752,7 @@ enum SnapshotCache {
         let entries = snapshots
             .filter { !$0.windows.isEmpty }
             .sorted { $0.provider.rawValue < $1.provider.rawValue }
-            .map { Entry(provider: $0.provider, planName: $0.planName, windows: $0.windows, observedAt: $0.observedAt, source: $0.source, costInfo: $0.costInfo) }
+            .map { Entry(provider: $0.provider, planName: $0.planName, windows: $0.windows, observedAt: $0.observedAt, source: $0.source, costInfo: $0.costInfo, headlineWindowID: $0.headlineWindowID) }
         do {
             let url = fileURL
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

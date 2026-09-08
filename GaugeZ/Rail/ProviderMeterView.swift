@@ -92,7 +92,8 @@ struct ProviderMeterView: View {
 
     private var valueLabel: String {
         if snapshot.health == .loading, !hasValue { return "…" }
-        return snapshot.remainingPercent.map { "\($0)%" } ?? "—"
+        if let count = snapshot.derivedRequestCount { return "~\(count)" }
+        return snapshot.remainingPercent.map { "\(PercentCopy.text($0))%" } ?? "—"
     }
 
     /// The most urgent session whose state is actually reported. Session records that omit
@@ -115,8 +116,9 @@ struct ProviderMeterView: View {
         if let remaining = snapshot.remainingPercent {
             let window = snapshot.headlineWindow?.label ?? "Quota"
             let activity = knownActivity.map { " · " + $0.state.rawValue } ?? ""
-            return "\(remaining)% remaining · \(window) · \(snapshot.health.shortLabel)\(activity)"
+            return "\(PercentCopy.text(remaining))% remaining · \(window) · \(snapshot.health.shortLabel)\(activity)"
         }
+        if let count = snapshot.derivedRequestCount { return "Derived: \(count) model turns today · no published quota" }
         if snapshot.headlineWindowID != nil { return "Selected quota window unavailable" }
         return snapshot.health.shortLabel
     }
@@ -125,7 +127,7 @@ struct ProviderMeterView: View {
 
 extension Color {
     /// Shared red/amber/green scale for remaining quota, used by the rail rings and detail bars.
-    static func quota(remainingPercent: Int) -> Color {
+    static func quota(remainingPercent: Double) -> Color {
         switch remainingPercent {
         case 0..<15: Color(red: 1, green: 0.27, blue: 0.23)
         case 15..<35: Color(red: 1, green: 0.62, blue: 0.04)

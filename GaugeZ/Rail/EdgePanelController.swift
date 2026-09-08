@@ -7,6 +7,10 @@ import SwiftUI
 /// collapsed tab -> expanded rail -> anchored detail card / attached settings.
 @MainActor
 final class EdgePanelController {
+    private let displayID: String?
+    private let expansionID = UUID()
+    private var peekTask: Task<Void, Never>?
+    private var peekEvent: SessionCompletionWatcher.Event?
     private let store: UsageStore
     private let panel: EdgePanel
     private let state = EdgePanelState()
@@ -43,7 +47,8 @@ final class EdgePanelController {
     private var snapshotCounter = 0
     private var snapshotTask: Task<Void, Never>?
 
-    init(store: UsageStore) {
+    init(store: UsageStore, displayID: String? = nil) {
+        self.displayID = displayID
         self.store = store
         panel = EdgePanel(
             contentRect: .zero,
@@ -210,8 +215,42 @@ final class EdgePanelController {
         panel.orderFrontRegardless()
     }
 
-    func toggleVisibility() {
-        if state.isExpanded {
+    func close() {
+        peekTask?.cancel()
+        collapseTask?.cancel()
+        attachmentTask?.cancel()
+        cancellables.removeAll()
+        store.expandedPanels.remove(expansionID)
+        for monitor in pointerMonitors { NSEvent.removeMonitor(monitor) }
+        pointerMonitors.removeAll()
+        usableAreaTimer?.invalidate()
+        panel.close()
+    }
+
+    private func peek(_ event: SessionCompletionWatcher.Event) {
+        guard store.displayMode != .hidden, state.attachment != .settings, !isAttachmentPinned, !isDragging else { return }
+        peekTask?.cancel()
+        collapseTask?.cancel()
+        attachmentTask?.cancel()
+        peekEvent = event
+        if let index = store.visibleProviders.firstIndex(of: event.session.provider) {
+            store.railPage = index / store.railPageCapacity
+        }
+        setExpanded(true)
+        setAttachment(.detail(event.session.provider))
+        peekTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self else { return }
+            self.peekEvent = nil
+            if !self.pointerIsOverVisibleContent, !self.isAttachmentPinned {
+                self.setAttachment(nil)
+                if self.store.displayMode == .hover { self.setExpanded(false) }
+            }
+        }
+    }
+
+    func setVisibility(_ expanded: Bool) {
+        if !expanded {
             setExpanded(false)
         } else {
             if store.displayMode == .hidden {
@@ -261,9 +300,11 @@ final class EdgePanelController {
     /// turn; otherwise they would read the store's *previous* value and, for example, keep the
     /// window on the old edge after the side is switched.
     private func observeSettings() {
+        store.sessionCompletions.sink { [weak self] event in self?.peek(event) }.store(in: &cancellables)
         store.$railPage.dropFirst().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
+                guard self.peekEvent == nil else { self.positionPanel(animated: false); return }
                 self.attachmentTask?.cancel()
                 self.state.hoveredProvider = nil
                 self.isAttachmentPinned = false
@@ -385,7 +426,7 @@ final class EdgePanelController {
     }
 
     private func scheduleCollapse() {
-        guard !isDragging else { return }
+        guard !isDragging, peekEvent == nil else { return }
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled, let self, !self.isPointerInRail, !self.isPointerInAttachment, !self.isDragging else { return }
@@ -437,6 +478,13 @@ final class EdgePanelController {
     }
 
     private func providerSelected(_ provider: ProviderID) {
+        if let event = peekEvent, event.session.provider == provider {
+            SessionFocus.activate(event.session)
+            peekEvent = nil
+            peekTask?.cancel()
+            if store.displayMode == .hover { setExpanded(false) }
+            return
+        }
         attachmentTask?.cancel()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -481,7 +529,7 @@ final class EdgePanelController {
             }
             setExpanded(isPointerInRail, animated: animated)
         case .hidden:
-            store.railIsExpanded = false
+            store.expandedPanels.remove(expansionID)
             isAttachmentPinned = false
             setAttachment(nil, animated: false)
             panel.orderOut(nil)
@@ -495,7 +543,7 @@ final class EdgePanelController {
             state.hoveredProvider = nil
             state.attachment = nil
         }
-        store.railIsExpanded = expanded
+        if expanded { store.expandedPanels.insert(expansionID) } else { store.expandedPanels.remove(expansionID) }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         withAnimation(animated && !reduceMotion ? .spring(duration: 0.2, bounce: 0.1) : .easeOut(duration: animated ? 0.1 : 0)) {
             state.isExpanded = expanded
@@ -664,7 +712,7 @@ final class EdgePanelController {
     }
 
     private var preferredScreen: NSScreen? {
-        NSScreen.screens.first(where: { DisplayChoice.identifier(for: $0) == store.selectedDisplayID })
+        NSScreen.screens.first(where: { DisplayChoice.identifier(for: $0) == (displayID ?? store.selectedDisplayID) })
             ?? NSScreen.screens.first
     }
 }

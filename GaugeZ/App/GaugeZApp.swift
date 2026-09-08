@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = UsageStore()
     let updateManager = UpdateManager()
 
-    private var edgePanelController: EdgePanelController?
+    private var edgePanelControllers: [EdgePanelController] = []
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var usageWindow: NSWindow?
@@ -34,9 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] presence in self?.applyPresence(presence) }
             .store(in: &cancellables)
 
-        let panelController = EdgePanelController(store: store)
-        edgePanelController = panelController
-        panelController.show()
+        rebuildPanels()
+        store.$selectedDisplayID.dropFirst().removeDuplicates().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rebuildPanels() }.store(in: &cancellables)
+        // Each controller already repositions itself on this notification. Tearing the panels
+        // down is only needed when a display joins or leaves an all-displays setup; otherwise a
+        // resolution change or display sleep would drop hover state and any pinned card.
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.store.selectedDisplayID == "all",
+                      self.panelDisplayIDs != Self.currentDisplayIDs else { return }
+                self.rebuildPanels()
+            }
+            .store(in: &cancellables)
         configureMainMenu()
         settingsObserver = NotificationCenter.default.addObserver(
             forName: .gaugezOpenSettings, object: nil, queue: .main
@@ -68,6 +79,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if !whatsNew.showIfNeeded(), !UserDefaults.standard.bool(forKey: "hasSeenIntroduction") {
             openSettingsWindow()
         }
+    }
+
+    /// The displays the current panels were built for, so a screen-parameter change that
+    /// leaves the set unchanged does not rebuild anything.
+    private var panelDisplayIDs: Set<String> = []
+
+    private static var currentDisplayIDs: Set<String> {
+        Set(NSScreen.screens.map { DisplayChoice.identifier(for: $0) })
+    }
+
+    private func rebuildPanels() {
+        for panel in edgePanelControllers { panel.close() }
+        panelDisplayIDs = Self.currentDisplayIDs
+        let ids: [String?] = store.selectedDisplayID == "all"
+            ? NSScreen.screens.map { DisplayChoice.identifier(for: $0) } : [nil]
+        edgePanelControllers = ids.map { EdgePanelController(store: store, displayID: $0) }
+        for panel in edgePanelControllers { panel.show() }
+    }
+
+    @objc private func refreshProvider(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let provider = ProviderID(rawValue: raw) else { return }
+        store.retry(provider)
     }
 
     static var marketingVersion: String {
@@ -105,7 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleNotch() {
-        edgePanelController?.toggleVisibility()
+        let expand = !edgePanelControllers.contains(where: \.isExpanded)
+        for panel in edgePanelControllers { panel.setVisibility(expand) }
     }
 
     @objc private func refreshUsage() {
@@ -225,6 +259,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Show GaugeZ", action: #selector(toggleNotch), keyEquivalent: "")
         menu.addItem(withTitle: "Usage…", action: #selector(openUsage), keyEquivalent: "u")
         menu.addItem(withTitle: "Refresh Usage", action: #selector(refreshUsage), keyEquivalent: "r")
+        let providers = NSMenuItem(title: "Refresh Provider", action: nil, keyEquivalent: "")
+        providers.submenu = NSMenu()
+        menu.addItem(providers)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         let settingsItem = menu.addItem(withTitle: "Settings…", action: #selector(openSettingsWindow), keyEquivalent: ",")
@@ -250,8 +287,18 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     private func syncMenuState(_ menu: NSMenu) {
+        if let submenu = menu.items.first(where: { $0.title == "Refresh Provider" })?.submenu {
+            submenu.removeAllItems()
+            for provider in store.visibleProviders {
+                let item = submenu.addItem(withTitle: provider.displayName, action: #selector(refreshProvider(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = provider.rawValue
+                item.isEnabled = !store.refreshing.contains(provider) && store.nextRetry(for: provider) == nil
+            }
+            submenu.autoenablesItems = false
+        }
         if let toggleItem = menu.items.first {
-            let isExpanded = edgePanelController?.isExpanded ?? false
+            let isExpanded = edgePanelControllers.contains(where: \.isExpanded)
             toggleItem.title = isExpanded ? "Hide GaugeZ" : "Show GaugeZ"
         }
         if let updateItem = menu.items.first(where: { $0.action == #selector(checkForUpdates) }) {

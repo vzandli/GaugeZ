@@ -26,6 +26,8 @@ actor CursorUsageProvider: UsageProviding {
         session = URLSession(configuration: configuration)
     }
 
+    nonisolated func forgetCredentials() { CursorLocalSession.agentCache.forget() }
+
     func fetchSnapshot() async throws -> UsageSnapshot {
         try retryPolicy.check()
         let snapshot = try await fetchUsage()
@@ -108,10 +110,43 @@ struct CursorLocalSession {
             .appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
     }
 
+    static let agentCache = ProviderSecretCache()
+    static let agentConfigURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cursor/cli-config.json")
+
     static func load() throws -> CursorLocalSession {
-        guard FileManager.default.fileExists(atPath: CursorUsageProvider.applicationBundlePath) else {
-            throw CursorProviderError.notInstalled
+        try load(editorStore: stateDatabaseURL, agentConfig: agentConfigURL) {
+            let data = try agentCache.read(service: "cursor-access-token", account: "cursor-user", provider: "Cursor CLI")
+            guard let token = String(data: data, encoding: .utf8) else { throw CursorProviderError.malformedSession }
+            return token
         }
+    }
+
+    static func load(editorStore: URL, agentConfig: URL, agentToken: () throws -> String) throws -> CursorLocalSession {
+        do { return try loadEditor(from: editorStore) }
+        catch CursorProviderError.notSignedIn { return try loadAgent(token: agentToken(), config: agentConfig) }
+        catch CursorProviderError.stateUnreadable { return try loadAgent(token: agentToken(), config: agentConfig) }
+    }
+
+    static func loadAgent(token: String, config: URL, now: Date = .now) throws -> CursorLocalSession {
+        let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let claims = try claims(fromJWT: token)
+        let expiry = (claims["exp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+        if let expiry, expiry <= now { throw CursorProviderError.sessionExpired }
+        let data = try? Data(contentsOf: config)
+        let root = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let info = root?["authInfo"] as? [String: Any] ?? [:]
+        func nonempty(_ value: Any?) -> String? {
+            guard let value = value as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        guard let id = nonempty(info["authId"]) ?? nonempty(info["userId"])
+            ?? (info["userId"] as? NSNumber)?.stringValue ?? nonempty(claims["sub"])
+        else { throw CursorProviderError.malformedSession }
+        return CursorLocalSession(accessToken: token, userID: id, email: info["email"] as? String,
+                                  membershipType: nil, expiresAt: expiry, appVersion: "CLI")
+    }
+
+    static func loadEditor(from stateDatabaseURL: URL) throws -> CursorLocalSession {
         guard FileManager.default.fileExists(atPath: stateDatabaseURL.path) else {
             throw CursorProviderError.notSignedIn
         }
@@ -124,13 +159,16 @@ struct CursorLocalSession {
         }
         let claims = try Self.claims(fromJWT: token)
         guard let subject = claims["sub"] as? String,
-              let userID = subject.split(separator: "|").last.map(String.init), !userID.isEmpty
+              !subject.isEmpty
         else { throw CursorProviderError.malformedSession }
 
         let expiresAt = (claims["exp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+        // The cookie's left half is the WorkOS id the editor caches as `stripeMembershipAuthId`.
+        // Recent Auth0 and enterprise builds omit it while signed in; the JWT subject is the same
+        // value, so it is the fallback rather than a sign-in prompt.
         return CursorLocalSession(
             accessToken: token,
-            userID: userID,
+            userID: store.value(forKey: "cursorAuth/stripeMembershipAuthId").flatMap { $0.isEmpty ? nil : $0 } ?? subject,
             email: store.value(forKey: "cursorAuth/cachedEmail"),
             membershipType: store.value(forKey: "cursorAuth/stripeMembershipType"),
             expiresAt: expiresAt,
@@ -205,15 +243,15 @@ enum CursorUsageParser {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CursorProviderError.malformedResponse
         }
-        guard let individual = object["individualUsage"] as? [String: Any],
-              let plan = individual["plan"] as? [String: Any]
-        else { throw CursorProviderError.unsupportedSummary }
+        guard let individual = object["individualUsage"] as? [String: Any] else { throw CursorProviderError.unsupportedSummary }
+        let plan = individual["plan"] as? [String: Any] ?? [:]
+        guard !plan.isEmpty || individual["overall"] != nil || object["teamUsage"] != nil else { throw CursorProviderError.unsupportedSummary }
 
         let cycleEnd = (object["billingCycleEnd"] as? String).flatMap(parseDate)
         let membershipType = object["membershipType"] as? String ?? membership
         var windows: [UsageWindow] = []
 
-        if (plan["enabled"] as? Bool) != false {
+        if !plan.isEmpty, (plan["enabled"] as? Bool) != false {
             let unlimited = (object["isUnlimited"] as? Bool) ?? false
             if let percent = (plan["totalPercentUsed"] as? NSNumber)?.doubleValue {
                 windows.append(try window(id: "cursor-plan", label: "Plan usage", usedPercent: percent, resetsAt: cycleEnd))
@@ -232,6 +270,14 @@ enum CursorUsageParser {
             windows.append(try window(id: "cursor-on-demand", label: "On-demand spend", usedPercent: used / limit * 100, resetsAt: cycleEnd))
         }
 
+        let team = object["teamUsage"] as? [String: Any] ?? [:]
+        for (bucket, id, label) in [(individual["overall"], "cursor-overall", "Included usage"),
+                                    (team["onDemand"], "cursor-team-on-demand", "Team on-demand spend")] {
+            guard let bucket = bucket as? [String: Any], bucket["enabled"] as? Bool == true,
+                  let used = (bucket["used"] as? NSNumber)?.doubleValue,
+                  let limit = (bucket["limit"] as? NSNumber)?.doubleValue, limit.isFinite, limit > 0 else { continue }
+            windows.append(try window(id: id, label: label, usedPercent: used / limit * 100, resetsAt: cycleEnd))
+        }
         guard !windows.isEmpty else { throw CursorProviderError.unlimited }
         return UsageSnapshot(
             provider: .cursor,
@@ -275,7 +321,7 @@ enum CursorUsageParser {
         return UsageWindow(
             id: id,
             label: label,
-            usedPercent: Int(min(100, usedPercent).rounded()),
+            usedPercent: min(100, usedPercent),
             resetsAt: resetsAt,
             durationMinutes: nil
         )
@@ -313,10 +359,10 @@ enum CursorProviderError: LocalizedError, ProviderHealthDescribing {
     var errorDescription: String? {
         switch self {
         case .notInstalled: "Cursor is not installed."
-        case .notSignedIn: "Cursor is not signed in. Sign in inside Cursor, then refresh."
+        case .notSignedIn: "Cursor is not signed in. Run cursor-agent login or sign in inside Cursor, then refresh."
         case .stateUnreadable: "Cursor's local state could not be read."
         case .malformedSession: "Cursor's sign-in has an unsupported format."
-        case .sessionExpired: "Cursor's sign-in has expired. Open Cursor so it refreshes, then retry."
+        case .sessionExpired: "Cursor's sign-in has expired. Open Cursor or run cursor-agent login, then retry."
         case .unauthorized: "Cursor rejected the local sign-in. Sign in inside Cursor again."
         case .rateLimited: "Cursor asked GaugeZ to slow down."
         case .offline(let detail): "Cursor could not be reached: \(detail)"

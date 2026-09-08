@@ -127,7 +127,7 @@ enum OpenCodeUsageParser {
             windows.append(UsageWindow(
                 id: descriptor.id,
                 label: descriptor.label,
-                usedPercent: Int(min(100, percent).rounded()),
+                usedPercent: min(100, percent),
                 resetsAt: (entry["resetsAt"] as? String).flatMap(date(from:)),
                 durationMinutes: descriptor.minutes
             ))

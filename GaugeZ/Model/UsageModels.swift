@@ -3,7 +3,7 @@ import Foundation
 /// A rail entry identifies a provider and, for Claude Code, an isolated profile.
 /// The original string IDs remain unchanged so existing preferences and caches migrate.
 struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, CaseIterable {
-    enum Kind: String, Sendable { case claude, cursor, codex, antigravity, glm, grok, opencode }
+    enum Kind: String, Sendable { case claude, cursor, codex, antigravity, glm, grok, opencode, copilot }
     let kind: Kind
     let profileSlug: String?
 
@@ -19,7 +19,8 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     static let glm = Self(kind: .glm)
     static let grok = Self(kind: .grok)
     static let opencode = Self(kind: .opencode)
-    static let allCases: [Self] = [.claude, .cursor, .codex, .antigravity, .glm, .grok, .opencode]
+    static let copilot = Self(kind: .copilot)
+    static let allCases: [Self] = [.claude, .cursor, .codex, .antigravity, .glm, .grok, .opencode, .copilot]
 
     init?(rawValue: String) {
         if let kind = Kind(rawValue: rawValue) {
@@ -36,7 +37,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     var supportsActivity: Bool {
         switch kind {
         case .claude, .cursor, .grok, .codex, .antigravity: true
-        case .glm, .opencode: false
+        case .glm, .opencode, .copilot: false
         }
     }
 
@@ -45,7 +46,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     var activityIsInferred: Bool { kind == .codex || kind == .antigravity }
 
     /// Providers without a bundled logo asset draw an SF Symbol instead.
-    var usesSymbolLogo: Bool { kind == .glm || kind == .grok || kind == .opencode }
+    var usesSymbolLogo: Bool { kind == .glm || kind == .opencode }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -70,6 +71,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .glm: "GLM"
         case .grok: "Grok Build"
         case .opencode: "OpenCode"
+        case .copilot: "GitHub Copilot"
         }
     }
 
@@ -82,6 +84,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .glm: "z.square.fill"
         case .grok: "g.circle.fill"
         case .opencode: "terminal.fill"
+        case .copilot: "c.circle.fill"
         }
     }
 
@@ -94,6 +97,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .glm: "GLMLogo"
         case .grok: "GrokLogo"
         case .opencode: "OpenCodeLogo"
+        case .copilot: "CopilotLogo"
         }
     }
 
@@ -110,6 +114,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .glm: URL(string: "https://z.ai/manage-apikey/apikey-list")
         case .grok: URL(string: "https://docs.x.ai/build/overview")
         case .opencode: URL(string: "https://opencode.ai")
+        case .copilot: URL(string: "https://github.com/settings/copilot")
         }
     }
 
@@ -120,10 +125,11 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
                 ?? "Reads the Claude desktop usage log, or the default Claude Code CLI sign-in from Keychain."
         case .cursor: "Uses Cursor's local sign-in to ask cursor.com for plan usage."
         case .codex: "Talks to the local app-server bundled with Codex, ChatGPT, or the codex CLI; without one, reads ChatGPT's usage endpoint with the CLI sign-in."
-        case .antigravity: "Asks the language server of a running Antigravity app or IDE for its model quotas."
+        case .antigravity: "Reads the local Antigravity server, then Google quota with the saved sign-in, or derives model turns from local transcripts."
         case .glm: "Reads Z.ai Coding Plan usage with a key held by Claude Code, ZCode, or OpenCode."
         case .grok: "Reads Grok Build’s xAI account sign-in from ~/.grok/auth.json and asks its billing service for the allowance."
         case .opencode: "Reads OpenCode Go plan usage with the opencode-go key OpenCode stores on sign-in."
+        case .copilot: "Reads Copilot quotas using GH_TOKEN or the GitHub CLI sign-in. Run gh auth login to connect."
         }
     }
 }
@@ -214,11 +220,11 @@ enum ResetCopy {
 struct UsageWindow: Identifiable, Equatable, Sendable, Codable {
     let id: String
     let label: String
-    let usedPercent: Int
+    let usedPercent: Double
     let resetsAt: Date?
     let durationMinutes: Int?
 
-    var remainingPercent: Int {
+    var remainingPercent: Double {
         max(0, min(100, 100 - usedPercent))
     }
 }
@@ -304,6 +310,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
     let source: String
     let health: ProviderHealth
     let costInfo: ProviderCostInfo?
+    let derivedRequestCount: Int?
 
     var headlineWindowID: String? = nil
 
@@ -314,7 +321,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
         return windows.min { $0.remainingPercent < $1.remainingPercent }
     }
 
-    var remainingPercent: Int? { headlineWindow?.remainingPercent }
+    var remainingPercent: Double? { headlineWindow?.remainingPercent }
 
     init(
         provider: ProviderID,
@@ -325,7 +332,8 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
         source: String,
         health: ProviderHealth,
         costInfo: ProviderCostInfo? = nil,
-        headlineWindowID: String? = nil
+        headlineWindowID: String? = nil,
+        derivedRequestCount: Int? = nil
     ) {
         self.provider = provider
         self.accountID = accountID
@@ -334,6 +342,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
         self.observedAt = observedAt
         self.source = source
         self.health = health
+        self.derivedRequestCount = derivedRequestCount
         self.costInfo = costInfo
         self.headlineWindowID = headlineWindowID
     }
@@ -365,7 +374,8 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
             source: source,
             health: health,
             costInfo: costInfo,
-            headlineWindowID: headlineWindowID
+            headlineWindowID: headlineWindowID,
+            derivedRequestCount: derivedRequestCount
         )
     }
 }
@@ -436,4 +446,16 @@ enum EdgeSide: String, CaseIterable, Identifiable, Sendable {
     var isHorizontal: Bool { self == .top || self == .bottom }
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
+}
+
+/// Keep exact values for rings and thresholds; round only at the last display step.
+enum PercentCopy {
+    static func text(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        let value = max(0, min(100, value))
+        if value > 0 && value < 0.1 { return "<0.1" }
+        if value > 0 && value < 1 { return String(format: "%.1f", min(0.9, value)) }
+        if value > 99 && value < 100 { return value > 99.9 ? ">99.9" : String(format: "%.1f", value) }
+        return String(format: "%.0f", value)
+    }
 }

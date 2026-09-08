@@ -30,8 +30,28 @@ struct UsageDetailCard: View {
             .font(.caption)
             .foregroundStyle(.white)
 
+            if let event = store.completionPeek, event.session.provider == snapshot.provider {
+                Button { SessionFocus.activate(event.session) } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.reason == .blocked ? "Needs your input" : event.session.isInferred ? "Activity paused · inferred" : "Session finished").font(.caption.weight(.semibold))
+                            Text(event.session.name + " · Open app").font(.caption2).lineLimit(1)
+                        }
+                    } icon: {
+                        Image(systemName: event.reason == .blocked ? "hand.raised.fill" : "checkmark.circle.fill")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .tint(event.reason == .blocked ? .orange : .green)
+            }
+            if let count = snapshot.derivedRequestCount {
+                Text("~\(count) model turns today · derived from local transcripts")
+                    .font(.caption.weight(.semibold))
+                Text("Quota unavailable. This is a local count, with no published limit.").font(.caption2).foregroundStyle(.secondary)
+            }
             if let headline = snapshot.headlineWindow {
-                Text("\(headline.remainingPercent)% left · \(headline.label)")
+                Text("\(PercentCopy.text(headline.remainingPercent))% left · \(headline.label)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(headline.remainingPercent == 0 ? .red : .white)
             } else if snapshot.headlineWindowID != nil {
@@ -44,7 +64,12 @@ struct UsageDetailCard: View {
                     get: { store.headlineWindows[snapshot.provider.rawValue] ?? "" },
                     set: { store.headlineWindows[snapshot.provider.rawValue] = $0.isEmpty ? nil : $0 }
                 )) {
-                    Text("Most constrained window").tag("")
+                    if let defaultID = store.snapshots[snapshot.provider]?.headlineWindowID,
+                       let window = snapshot.windows.first(where: { $0.id == defaultID }) {
+                        Text("Default: \(window.label)").tag("")
+                    } else {
+                        Text("Most constrained window").tag("")
+                    }
                     ForEach(snapshot.windows) { window in Text(window.label).tag(window.id) }
                     if let selected = snapshot.headlineWindowID, !snapshot.windows.contains(where: { $0.id == selected }) {
                         Text("Selected window (unavailable)").tag(selected)
@@ -67,7 +92,7 @@ struct UsageDetailCard: View {
                     .foregroundStyle(.orange)
             }
 
-            if snapshot.windows.isEmpty {
+            if snapshot.windows.isEmpty && snapshot.derivedRequestCount == nil {
                 Text(emptyMessage)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.7))
@@ -93,7 +118,7 @@ struct UsageDetailCard: View {
                                 .padding(.vertical, 1)
 
                             HStack {
-                                Text("\(window.usedPercent)% used · \(window.remainingPercent)% left")
+                                Text("\(PercentCopy.text(window.usedPercent))% used · \(PercentCopy.text(window.remainingPercent))% left")
                                     .font(.caption2.weight(.semibold))
                                     .monospacedDigit()
                                 Spacer()
@@ -285,7 +310,7 @@ struct UsageDetailCard: View {
 
 private struct UsageBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let remainingPercent: Int
+    let remainingPercent: Double
 
     var body: some View {
         GeometryReader { proxy in

@@ -24,6 +24,30 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.6",
+            headline: "GitHub Copilot joins the rail, limits can tell you before they bite, and sessions say when they finish.",
+            changes: [
+                .init("GitHub Copilot is a new ring",
+                      "Reads GitHub's Copilot quota endpoint with GH_TOKEN or the GitHub CLI sign-in. Premium requests headline it. Enable it in Settings."),
+                .init("Usage alerts at 20% and 0% remaining",
+                      "A system notification once per crossing, never repeated while a limit stays crossed. Mute any provider from its row in Settings → Providers."),
+                .init("The rail peeks when a session finishes or needs you",
+                      "With session activity on, the rail opens for five seconds and shows which session it was. Click it to raise the owning app. Optional sounds tell finished from waiting; they start off."),
+                .init("Cursor without the editor, and team plans",
+                      "A cursor-agent login gets a ring on its own, and enterprise and team accounts read their included usage and shared on-demand budget instead of reporting nothing."),
+                .init("Antigravity when it is closed",
+                      "Google's quota endpoint is asked with the saved sign-in, and when it will not answer for the account, the card shows a clearly labeled count of today's model turns instead of a guessed percentage."),
+                .init("Sub-1% readings stop rounding to 0% or 100%",
+                      "Fractions survive from the endpoint to the ring. Below 1% left shows a tenth, or <0.1%, and only a real zero turns the ring red."),
+                .init("Rails on every display",
+                      "Choose All displays in Settings → Appearance to get a rail on each connected screen."),
+                .init("Refresh one provider from the menu bar",
+                      "Refresh Provider lists each enabled ring."),
+                .init("Erase all data and quit",
+                      "Diagnostics can remove GaugeZ's settings, cached readings, and login registration so a reinstall starts clean. Provider sign-ins stay with their own apps.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.5",
             headline: "OpenCode joins the rail, sessions tell you how long, and a few things stop going wrong.",
             changes: [

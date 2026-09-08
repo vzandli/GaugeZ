@@ -87,7 +87,7 @@ enum GLMUsageParser {
             }
             guard !windows.contains(where: { $0.id == descriptor.0 }) else { throw GLMProviderError.malformed }
             windows.append(UsageWindow(id: descriptor.0, label: descriptor.1,
-                                       usedPercent: Int(min(100, percentage).rounded()), resetsAt: reset,
+                                       usedPercent: min(100, percentage), resetsAt: reset,
                                        durationMinutes: descriptor.2))
         }
         guard !windows.isEmpty else { throw GLMProviderError.noLimits }

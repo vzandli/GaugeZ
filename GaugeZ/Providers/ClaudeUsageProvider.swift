@@ -461,7 +461,7 @@ enum ClaudeUsageParser {
             let resetsAt = ((entry["resets_at"] ?? entry["resetsAt"]) as? String).flatMap(parseDate)
             let descriptor = describe(key: key)
             windows.append((descriptor.order, UsageWindow(
-                id: key, label: descriptor.label, usedPercent: Int(percent.rounded()),
+                id: key, label: descriptor.label, usedPercent: percent,
                 resetsAt: resetsAt, durationMinutes: descriptor.durationMinutes)))
         }
         for (key, value) in object {
@@ -483,7 +483,7 @@ enum ClaudeUsageParser {
                 UsageWindow(
                     id: key,
                     label: descriptor.label,
-                    usedPercent: Int(utilization.rounded()),
+                    usedPercent: utilization,
                     resetsAt: resetsAt,
                     durationMinutes: descriptor.durationMinutes
                 )
@@ -689,7 +689,7 @@ enum ClaudeDesktopUsageReader {
             windows.append(UsageWindow(
                 id: "desktop-\(key)",
                 label: label,
-                usedPercent: Int(value.rounded()),
+                usedPercent: value,
                 resetsAt: nil,
                 durationMinutes: duration
             ))

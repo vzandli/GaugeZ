@@ -24,6 +24,7 @@ struct ProviderRegressionTests {
         let suite = "GaugeZ.Tests.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        try await portedFeatures(root, defaults)
         try profiles(root)
         try credentials()
         try keychainTransient()
@@ -45,6 +46,120 @@ struct ProviderRegressionTests {
         try await networking(root: root, defaults: defaults)
         try await grokNetworking(root: root, defaults: defaults)
         print("Passed \(checks) provider regression checks.")
+    }
+
+    static func portedFeatures(_ root: URL, _ defaults: UserDefaults) async throws {
+        let hosts = "github.com:\n    user: active\n    oauth_token: host-token\n    users:\n        old:\n            oauth_token: wrong-token\nother.example:\n    oauth_token: other-token\n"
+        var commands = 0
+        func command() -> String? { commands += 1; return "cli-token" }
+        let env = try GitHubCopilotCredentials.load(environment: ["GH_TOKEN": " env-token "], hosts: hosts, command: command)
+        try expect(env.token == "env-token" && commands == 0, "Copilot environment takes precedence")
+        let host = try GitHubCopilotCredentials.load(environment: [:], hosts: hosts, command: command)
+        try expect(host.token == "host-token" && host.username == "active" && commands == 0, "Copilot active host token excludes nested inactive accounts")
+        let nestedHosts = "github.com:\n    user: active\n    users:\n        active:\n            oauth_token: active-token\n        old:\n            oauth_token: wrong-token\n"
+        let nested = try GitHubCopilotCredentials.load(environment: [:], hosts: nestedHosts, command: command)
+        try expect(nested.token == "active-token" && commands == 0, "Multi-account hosts uses active account without invoking CLI")
+        let cli = try GitHubCopilotCredentials.load(environment: [:], hosts: nil, command: command)
+        try expect(cli.token == "cli-token" && commands == 1, "Copilot CLI fallback")
+        try rejects({ _ = try GitHubCopilotCredentials.load(environment: [:], hosts: nil, command: { nil }) }, "Copilot missing sign-in")
+        let quota = #"{"quota_reset_date":"2027-01-01T00:00:00Z","quota_snapshots":{"chat":{"unlimited":true,"entitlement":100},"completions":{"entitlement":0,"remaining":0},"premium_interactions":{"entitlement":1000,"remaining":3},"future":{"entitlement":10,"used":2}}}"#
+        let windows = try GitHubCopilotUsage.windows(from: Data(quota.utf8))
+        try expect(windows.map(\.id) == ["premium_interactions", "future"], "Copilot ordering and unmetered filtering")
+        try expect(abs(windows[0].remainingPercent - 0.3) < 0.00001 && windows[0].resetsAt != nil, "Copilot exact fractions and resets")
+        try rejects({ _ = try GitHubCopilotUsage.windows(from: Data(#"{"quota_snapshots":{"chat":{"remaining":3}}}"#.utf8)) }, "No invented quota denominator")
+        for (value, copy) in [(0.0, "0"), (0.03, "<0.1"), (0.3, "0.3"), (0.99, "0.9"), (99.7, "99.7"), (99.99, ">99.9"), (100, "100")] {
+            try expect(PercentCopy.text(value) == copy, "Exact endpoint display for \(value)")
+        }
+        let oldCache = Data(#"{"id":"old","label":"Old","usedPercent":80,"resetsAt":null,"durationMinutes":null}"#.utf8)
+        try expect(try JSONDecoder().decode(UsageWindow.self, from: oldCache).remainingPercent == 20, "Integer cache migrates to Double")
+        let encoded = try JSONEncoder().encode(windows)
+        try expect(try JSONDecoder().decode([UsageWindow].self, from: encoded) == windows, "Fractional cache round trip")
+
+        func snapshot(_ used: Double, health: ProviderHealth = .live, provider: ProviderID = .copilot) -> UsageSnapshot {
+            UsageSnapshot(provider: provider, accountID: nil, planName: nil,
+                          windows: [UsageWindow(id: "window", label: "Monthly", usedPercent: used, resetsAt: nil, durationMinutes: nil)],
+                          observedAt: .now, source: "fixture", health: health)
+        }
+        var detector = ThresholdNotifier()
+        try expect(detector.observe(snapshot(79.9)).isEmpty, "No premature 80% alert")
+        try expect(detector.observe(snapshot(80)).map(\.threshold) == [80], "20% left alert")
+        try expect(detector.observe(snapshot(99.7)).isEmpty, "Sub-1% is not exhausted")
+        try expect(detector.observe(snapshot(100)).map(\.threshold) == [100], "Exhaustion alert")
+        try expect(detector.observe(snapshot(99)).isEmpty && detector.observe(snapshot(100)).isEmpty, "100% jitter does not re-alert")
+        try expect(detector.observe(snapshot(0, health: .stale("old"))).isEmpty && detector.observe(snapshot(100)).isEmpty, "Stale snapshots cannot reset crossing memory")
+        _ = detector.observe(snapshot(79))
+        try expect(detector.observe(snapshot(100)).map(\.threshold) == [80, 100], "New cycle crosses both levels")
+        _ = detector.observe(snapshot(80, provider: .cursor), muted: true)
+        try expect(detector.observe(snapshot(90, provider: .cursor)).isEmpty, "Unmuting does not replay alerts")
+        try expect(detector.observe(snapshot(80, provider: .claude)).count == 1, "Provider crossing memories isolated")
+
+        func activity(_ state: ActivitySession.State, id: String = "one", provider: ProviderID = .claude) -> ActivitySession {
+            ActivitySession(id: id, provider: provider, name: "Fixture", project: "Fixture", state: state, waitingReason: nil)
+        }
+        var watcher = SessionCompletionWatcher()
+        try expect(watcher.absorb([activity(.idle), activity(.working, id: "two")]).isEmpty, "Initial sessions stay quiet")
+        try expect(watcher.absorb([activity(.idle), activity(.waiting, id: "two")]).first?.reason == .blocked, "Working to waiting")
+        try expect(watcher.absorb([activity(.working), activity(.idle, id: "two")]).isEmpty, "Waiting to idle is not completion")
+        try expect(watcher.absorb([activity(.idle)]).first?.reason == .finished, "Working to idle")
+        _ = watcher.absorb([activity(.working)])
+        try expect(watcher.absorb([]).isEmpty && watcher.absorb([activity(.idle)]).isEmpty, "Vanished and rediscovered sessions stay quiet")
+        _ = watcher.absorb([activity(.working)])
+        try expect(watcher.absorb([activity(.unknown)]).isEmpty, "Unknown is not completion")
+
+        let config = root.appendingPathComponent("cli-config.json")
+        try Data(#"{"authInfo":{"authId":"workos|fixture","userId":123,"email":"fixture@example.test"}}"#.utf8).write(to: config)
+        let token = "header." + Data(#"{"sub":"fallback","exp":4102444800}"#.utf8).base64EncodedString() + ".signature"
+        let cursor = try CursorLocalSession.load(editorStore: root.appendingPathComponent("missing-db"), agentConfig: config, agentToken: { token })
+        try expect(cursor.userID == "workos|fixture" && cursor.appVersion == "CLI", "Cursor CLI works with no editor")
+        try expect(cursor.cookieValue.contains("%3A%3A"), "Cursor cookie pairs account and JWT")
+        try rejects({ _ = try CursorLocalSession.loadAgent(token: token, config: config, now: .distantFuture) }, "Expired CLI token rejected")
+        let team = try CursorUsageParser.snapshot(fromSummary: Data(#"{"membershipType":"enterprise","individualUsage":{"overall":{"enabled":true,"used":6907,"limit":45000}},"teamUsage":{"onDemand":{"enabled":true,"used":0,"limit":1000000}}}"#.utf8), account: nil, membership: nil, source: "fixture")
+        try expect(team.windows.map(\.id) == ["cursor-overall", "cursor-team-on-demand"], "Enterprise individual and shared budgets retained")
+        try expect(abs(team.windows[0].usedPercent - 6907.0 / 45000 * 100) < 0.0001, "Enterprise ratio preserved")
+        let precise = try CursorUsageParser.snapshot(fromSummary: Data(#"{"individualUsage":{"plan":{"enabled":true,"totalPercentUsed":99.7}}}"#.utf8), account: nil, membership: nil, source: "fixture")
+        try expect(precise.remainingPercent! > 0 && PercentCopy.text(precise.remainingPercent!) == "0.3", "Cursor fractional remainder")
+
+        let googleStored = Data(#"{"auth_method":"consumer","token":{"access_token":"fixture","expiry":"2027-01-01T07:00:00.123+07:00"}}"#.utf8)
+        let credential = AntigravityCredentials.decode(Data(("go-keyring-base64:" + googleStored.base64EncodedString()).utf8))
+        try expect(credential?.accessToken == "fixture" && credential?.expiresAt == AntigravityCredentials.parse("2027-01-01T00:00:00.123Z"), "Antigravity Go keyring and timezone decoding")
+        let googleQuota = #"{"quotaGroups":[{"buckets":[{"name":"weekly","displayName":"Weekly","limit":1000,"used":997,"resetTime":"2027-01-01T00:00:00Z"}]}]}"#
+        let googleWindows = try AntigravityQuotaParser.remoteWindows(from: Data(googleQuota.utf8))
+        try expect(googleWindows.count == 1 && googleWindows[0].remainingPercent > 0, "Google remote quota shape")
+        try rejects({ _ = try AntigravityQuotaParser.remoteWindows(from: Data(#"{"buckets":[{"name":"bad","used":9,"limit":0}]}"#.utf8)) }, "Google rejects absent denominator")
+        let logs = root.appendingPathComponent("brain/session/.system_generated/logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = ISO8601DateFormatter().string(from: now)
+        let yesterday = ISO8601DateFormatter().string(from: now.addingTimeInterval(-86400))
+        try Data("{\"source\":\"MODEL\",\"created_at\":\"\(today)\"}\n{\"source\":\"USER\",\"created_at\":\"\(today)\"}\ninvalid\n{\"source\":\"MODEL\",\"created_at\":\"\(yesterday)\"}\n".utf8).write(to: logs.appendingPathComponent("transcript.jsonl"))
+        let count = AntigravityActivity.read(root: root.appendingPathComponent("brain"), now: now)
+        try expect(count.requestsToday == 1 && count.lastRequest == now, "Derived count includes only today's MODEL turns")
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, quota), (401, "{}"), (429, "{}")]
+        let copilot = GitHubCopilotProvider(session: session, retryPolicy: ProviderRetryPolicy(provider: .copilot, defaults: defaults), loadCredentials: { GitHubCopilotCredentials(token: "fixture", username: nil, source: "fixture") })
+        let result = try await copilot.fetchSnapshot()
+        try expect(result.headlineWindowID == "premium_interactions", "Copilot headline follows premium requests")
+        try expect(FixtureProtocol.requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer fixture", "Copilot bearer header")
+        do { _ = try await copilot.fetchSnapshot(); throw Failure(description: "Expected Copilot auth rejection") } catch CopilotProviderError.signedOut { checks += 1 }
+        do { _ = try await copilot.fetchSnapshot(); throw Failure(description: "Expected Copilot throttle") } catch is ProviderRetryError { checks += 1 }
+        let attempts = FixtureProtocol.requests.count
+        do { _ = try await copilot.fetchSnapshot(); throw Failure(description: "Expected backoff") } catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == attempts, "Copilot backoff prevents network call")
+
+        FixtureProtocol.responses = [(200, googleQuota), (403, "{}")]
+        let antigravity = AntigravityUsageProvider(remoteSession: session, retryPolicy: ProviderRetryPolicy(provider: .antigravity, defaults: defaults), localQuota: { throw AntigravityProviderError.noReachableServer }, loadCredentials: { AntigravityCredentials(accessToken: "fixture", expiresAt: .distantFuture, authMethod: "licensed") }, readActivity: { AntigravityActivity(requestsToday: 3, lastRequest: .now) })
+        let remote = try await antigravity.fetchSnapshot()
+        try expect(remote.windows.count == 1 && remote.source == "Google Cloud Code quota", "Closed Antigravity tries remote quota")
+        let derived = try await antigravity.fetchSnapshot()
+        try expect(derived.derivedRequestCount == 3 && derived.windows.isEmpty && derived.remainingPercent == nil, "403 falls back to derived count without inventing a percentage")
+        let asked = FixtureProtocol.requests.count
+        let again = try await antigravity.fetchSnapshot()
+        try expect(FixtureProtocol.requests.count == asked && again.derivedRequestCount == 3, "A refused token is not sent to Google again until it rotates")
     }
 
     static func profiles(_ root: URL) throws {
@@ -167,7 +282,7 @@ struct ProviderRegressionTests {
         let data = Data(#"{"code":200,"success":true,"data":{"level":"pro","limits":[{"type":"TIME_LIMIT","percentage":4},{"type":"CREDIT_LIMIT","unit":6,"number":1,"percentage":8.1,"nextResetTime":1800000000000},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":12.5}]}}"#.utf8)
         let parsed = try GLMUsageParser.parse(data)
         try expect(parsed.windows.map(\.id) == ["session", "weekly", "mcp"], "GLM window order and credit plans")
-        try expect(parsed.windows[0].remainingPercent == 87, "GLM remaining percent")
+        try expect(parsed.windows[0].remainingPercent == 87.5, "GLM remaining percent")
         try expect(parsed.windows[1].resetsAt == Date(timeIntervalSince1970: 1_800_000_000), "GLM milliseconds reset")
         try expect(parsed.windows[2].resetsAt == nil, "Keep MCP allowance with no reset")
         for json in [#"{"code":401,"success":false}"#, #"{"code":200,"success":false,"data":{"limits":[]}}"#,
@@ -297,7 +412,7 @@ struct ProviderRegressionTests {
         let live = Data(#"{"usage":{"rolling":{"status":"ok","percent":12.4,"resetsAt":"2026-09-06T12:31:06.611Z"},"weekly":{"status":"ok","percent":3,"resetsAt":"2026-09-07T00:00:00Z"},"monthly":{"status":"ok","percent":0,"resetsAt":"2026-10-03T13:09:45.611Z"}}}"#.utf8)
         let windows = try OpenCodeUsageParser.windows(from: live)
         try expect(windows.map(\.id) == ["rolling", "weekly", "monthly"], "OpenCode windows in headline order")
-        try expect(windows[0].remainingPercent == 88 && windows[0].durationMinutes == 300, "Percent is already used; rolling is the 5-hour window")
+        try expect(windows[0].remainingPercent == 87.6 && windows[0].durationMinutes == 300, "Percent is already used; rolling is the 5-hour window")
         try expect(windows[0].resetsAt == OpenCodeUsageParser.date(from: "2026-09-06T12:31:06.611Z") && windows[1].resetsAt == OpenCodeUsageParser.date(from: "2026-09-07T00:00:00Z"), "Fractional and plain resets both parse")
         for json in ["{}", #"{"usage":{}}"#, #"{"usage":{"rolling":{"percent":-1}}}"#, #"{"usage":{"rolling":{"percent":"12"}}}"#] {
             try rejects({ _ = try OpenCodeUsageParser.windows(from: Data(json.utf8)) }, "Missing or invalid OpenCode data is not free quota")
@@ -422,7 +537,7 @@ struct ProviderRegressionTests {
         let windows = try CodexWebUsage.windows(from: free, now: now)
         try expect(windows.map(\.id) == ["primary", "secondary"], "Both windows read")
         try expect(windows[0].label == "30-day limit" && windows[0].durationMinutes == 43_200, "A free plan's 30-day window is labeled from its length")
-        try expect(windows[0].usedPercent == 12 && windows[0].resetsAt == Date(timeIntervalSince1970: 1_800_000_000), "Epoch reset and rounded percent")
+        try expect(windows[0].usedPercent == 12.4 && windows[0].resetsAt == Date(timeIntervalSince1970: 1_800_000_000), "Epoch reset and precise percent")
         try expect(windows[1].label == "Weekly limit" && windows[1].resetsAt == now.addingTimeInterval(3600), "reset_after_seconds is relative to now")
         for json in ["{}", #"{"rate_limit":{}}"#, #"{"rate_limit":{"primary_window":{"limit_window_seconds":300}}}"#] {
             try rejects({ _ = try CodexWebUsage.windows(from: Data(json.utf8)) }, "Missing Codex windows are not free quota")
@@ -499,7 +614,7 @@ struct ProviderRegressionTests {
     static func grok(_ root: URL) throws {
         let modern = Data(#"{"config":{"creditUsagePercent":42.5,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2027-01-08T00:00:00Z"},"isUnifiedBillingUser":true,"onDemandCap":{"val":1000},"onDemandUsed":{"val":250},"monthlyLimit":{"val":100},"used":{"val":99}}}"#.utf8)
         let parsed = try GrokUsageParser.parse(modern)
-        try expect(parsed.windows[0].remainingPercent == 57, "Grok prefers current percent over legacy cents")
+        try expect(parsed.windows[0].remainingPercent == 57.5, "Grok prefers current percent over legacy cents")
         try expect(parsed.windows[0].label == "Shared weekly allowance", "Shared quota is labeled across Grok products")
         try expect(parsed.windows[0].durationMinutes == 10080, "Weekly duration")
         try expect(parsed.windows[0].resetsAt == GrokUsageParser.date("2027-01-08T00:00:00Z"), "Current period reset")

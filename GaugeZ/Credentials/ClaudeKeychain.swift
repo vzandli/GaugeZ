@@ -19,14 +19,15 @@ enum ClaudeKeychain {
         let persistentRef: Data
     }
 
-    static func newest(service: String) throws -> Match? {
-        let query: [String: Any] = [
+    static func newest(service: String, account: String? = nil) throws -> Match? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
             kSecReturnPersistentRef as String: true,
             kSecMatchLimit as String: kSecMatchLimitAll
         ]
+        if let account { query[kSecAttrAccount as String] = account }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }

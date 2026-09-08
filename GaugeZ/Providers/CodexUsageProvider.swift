@@ -240,7 +240,7 @@ enum CodexWebUsage {
             windows.append(UsageWindow(
                 id: id,
                 label: CodexWindowLabel.label(minutes: minutes, fallback: fallback),
-                usedPercent: Int(max(0, min(100, percent)).rounded()),
+                usedPercent: max(0, min(100, percent)),
                 resetsAt: resetsAt,
                 durationMinutes: minutes
             ))
@@ -482,7 +482,7 @@ private struct RateLimitSnapshot: Decodable {
 }
 
 private struct RateLimitWindow: Decodable {
-    let usedPercent: Int
+    let usedPercent: Double
     let resetsAt: Int64?
     let windowDurationMins: Int?
 

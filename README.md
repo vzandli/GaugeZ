@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="GaugeZ/Assets.xcassets/AppIcon.appiconset/GaugeZ-AppIcon-256.png" width="128" alt="GaugeZ icon">
+<img src="GaugeZ/Resources/Assets.xcassets/AppIcon.appiconset/GaugeZ-AppIcon-256.png" width="128" alt="GaugeZ icon">
 
 # GaugeZ
 
 **Your AI subscription limits, one glance away.**
 
 A native macOS edge rail that shows how much of your Claude, Codex, Cursor, Antigravity, GLM,
-Grok Build, and OpenCode quota is left, on any screen edge.
+Grok Build, OpenCode, and GitHub Copilot quota is left, on any screen edge.
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)](#building-from-source)
@@ -16,7 +16,7 @@ Grok Build, and OpenCode quota is left, on any screen edge.
 
 <br>
 
-<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail on the right edge with Claude, Cursor, Codex, Antigravity, GLM, Grok Build, and OpenCode rings, and the Antigravity detail card showing Claude/GPT and Gemini 5-hour and weekly limits">
+<img src="docs/screenshot.png" width="720" alt="GaugeZ edge rail on the right edge with Claude, Cursor, Codex, Antigravity, Grok Build, GitHub Copilot, GLM, and OpenCode rings, and the Antigravity detail card showing Claude/GPT and Gemini 5-hour and weekly limits">
 
 </div>
 
@@ -33,12 +33,22 @@ expand it, glance at the rings, and get back to work.
 
 ## Features
 
-- **Edge rail, not a window.** A slim tab lives on any edge of your chosen display
+- **Edge rail, not a window.** A slim tab lives on any edge of your chosen display or all connected displays
   and expands on hover. It never steals focus and follows you across Spaces.
 - **Remaining, never used.** The compact number is always what you have *left*. When a
   provider has several windows, the rail shows the most constrained one by default. Pick a
   particular window or model in its detail card, which names the headline window and lists
   all windows with absolute and relative reset times.
+- **Usage alerts.** Notifications at 20% and 0% remaining, with a per-provider mute in
+  Settings. Permission is requested on the first actual alert.
+- **Session completion.** With activity enabled, the rail can peek for five seconds when a
+  Claude Code, Cursor, or Grok Build session finishes or needs input. Click the peek to raise
+  the owning app. Optional sounds distinguish finished work from waiting; sounds default off.
+  Codex and Antigravity activity is inferred from write recency and never announces a finish.
+- **Precise near zero.** Fractional remaining quotas stay precise; values below 1% show a
+  tenth, or `<0.1%`, and only an actual zero gets the exhausted ring.
+- **Erase all data.** Diagnostics can remove GaugeZ settings, cached readings and login
+  registration, then quit. Provider credentials are left with their owning apps.
 - **Honest states.** Live, stale, signed out, permission needed, and unavailable are
   visually distinct. GaugeZ never turns missing data into `0%`.
 - **Liquid Glass.** On macOS 26 the rail uses native glass with a 0 to 100 percent
@@ -83,10 +93,11 @@ expand it, glance at the rings, and get back to work.
 | --- | --- |
 | **Claude** | The usage log kept by the Claude desktop app, or the Claude Code sign-in stored in your Keychain. |
 | **Codex** | The app-server bundled with Codex, ChatGPT, or an installed `codex` CLI, over a local process. Without one, the CLI's ChatGPT sign-in in `~/.codex/auth.json` is used to read the same usage endpoint Codex calls. |
-| **Cursor** | Cursor's local sign-in, used to ask cursor.com for your plan usage. |
-| **Antigravity** | The language server of a running Antigravity app or IDE, asked for its model quotas. |
+| **Cursor** | Editor sign-in or the `cursor-agent` Keychain token and `~/.cursor/cli-config.json`; supports individual, enterprise and team budgets. |
+| **Antigravity** | Local language server first, then Google Cloud Code quota using the saved sign-in. When quota is unavailable, a clearly labeled local model-turn count is derived from transcripts. Previous quota readings remain stale instead of becoming a count. |
 | **GLM** | Z.ai Coding Plan usage, using a readable key held by Claude Code, ZCode, or OpenCode; supports global and China consoles. |
 | **Grok Build** | The xAI account sign-in in `~/.grok/auth.json`, asked via its billing service for allowance and on-demand spend. |
+| **GitHub Copilot** | `GH_TOKEN` (or `GITHUB_TOKEN`), then the GitHub host token in `~/.config/gh/hosts.yml`, then `gh auth token`. Premium requests headline its metered quotas. |
 | **OpenCode** | The Go plan's official usage endpoint, with the `opencode-go` key OpenCode stores in `~/.local/share/opencode/auth.json` on sign-in. |
 
 Each provider and Claude profile can be switched off independently in Settings, and a
@@ -103,24 +114,27 @@ arbitrary `CLAUDE_CONFIG_DIR` paths outside that convention are not discovered.
 GaugeZ is a local companion app.
 
 - It talks only to the providers you enable, using the sign-in those apps already have.
-- Tokens are never written to disk or logged. Claude Code credentials are cached in
-  memory until their Keychain item changes or you explicitly retry/forget the reading.
-  Duplicate Keychain entries are resolved by modification time, within the selected profile.
-  A denied secret read is not repeated by automatic polling while that item is unchanged.
+- Tokens are never written to disk or logged. Three credentials live in the login Keychain
+  and may prompt once: the Claude Code sign-in, Antigravity's Google token (read only when
+  Antigravity is not running), and the `cursor-agent` token (read only when the editor has no
+  session). Each is cached in memory until its Keychain item changes or you explicitly
+  retry/forget the reading. Duplicate Keychain entries are resolved by modification time,
+  within the selected profile. A denied secret read is not repeated by automatic polling
+  while that item is unchanged.
 - Optional activity monitoring reads Claude Code session metadata, Cursor composer
   headers, Grok Build's active-session list and session titles, Codex's thread catalogue
   and rollout timestamps, and Antigravity transcript timestamps locally without persisting
-  them. It does not read conversation transcripts or rollout contents. The Grok Build card also
+  them. Activity monitoring does not read conversation or rollout contents. The Antigravity quota fallback separately decodes model-turn timestamps from local transcripts, without retaining their text. The Grok Build card also
   reads the token and cost totals from the latest session's local update log.
 - Open Grok Build starts the installed `grok` CLI in Terminal, which asks for Automation
-  permission the first time. Nothing else launches or scripts other apps.
+  permission the first time. Session peeks can activate the application that owns an agent process.
 - No analytics, no telemetry, no accounts. The only outbound connection GaugeZ makes on
   its own is the update check against this repository's releases.
 
 ## Requirements
 
 - macOS 14 Sonoma or later. Liquid Glass surfaces need macOS 26.
-- The provider apps you want to track installed and signed in.
+- A supported provider app or CLI signed in. GitHub Copilot also accepts `GH_TOKEN`.
 
 ## Install
 
@@ -169,31 +183,52 @@ xcodebuild -project GaugeZ.xcodeproj -scheme GaugeZ -configuration Release build
 
 ```
 GaugeZ/
-├── GaugeZApp.swift             App delegate, menu bar item, settings window
-├── EdgePanelController.swift   Borderless edge panel, hover ownership, placement
-├── EdgeViews.swift             Side rail, shared geometry, shapes, and hover attachments
-├── HorizontalRailView.swift    Top and bottom placement
-├── ProviderMeterView.swift     Quota ring and activity badge
-├── UsageDetailCard.swift       Window selection, quota details, and session activity
-├── AttachedSettingsView.swift  Compact rail settings
-├── RailSurfaces.swift          Glass and accessible surface rendering
-├── UsageOverviewView.swift     Keyboard-accessible usage window
-├── WhatsNewView.swift          Once-per-version release notes window
-├── ReleaseNotes.swift          The notes it shows, checked against MARKETING_VERSION by the tests
-├── AppPresence.swift           Dock, menu bar, or neither
-├── ActivityReader.swift        Opt-in Claude Code, Cursor, and Grok Build session metadata
-├── ProviderRetryPolicy.swift   Persistent per-provider rate-limit backoff
-├── ContentView.swift           Settings: Providers, Appearance, Diagnostics, Updates
-├── UsageStore.swift            Refresh scheduling, cache policy, normalized snapshots
-├── UsageModels.swift           Provider IDs (including Claude profiles), windows, health states
-├── ClaudeProfile.swift         ~/.claude-* discovery and per-profile Keychain service names
-├── ClaudeKeychain.swift        Metadata-first Keychain reads and the in-memory credential cache
-├── GLMCredentials.swift        Z.ai key discovery across Claude Code, ZCode, and OpenCode
-├── *UsageProvider.swift        One adapter per provider
-├── UpdateManager.swift         Sparkle integration with gentle background reminders
-└── GaugeZ.entitlements         Apple Events automation for Open Grok Build
-Tests/                          Fixture-based provider regression checks
-scripts/test-providers.sh       Compiles the adapters with the checks and runs them
+├── App/
+│   ├── GaugeZApp.swift             App delegate, menu bar item, settings and usage windows
+│   ├── AppPresence.swift           Dock, menu bar, or neither
+│   ├── UpdateManager.swift         Sparkle integration with gentle background reminders
+│   ├── ReleaseNotes.swift          What's New notes, checked against MARKETING_VERSION by the tests
+│   └── DisplayChoice.swift         Display identifiers and the hardware notch
+├── Model/
+│   ├── UsageModels.swift           Provider IDs (including Claude profiles), windows, health states
+│   ├── UsageStore.swift            Refresh scheduling, cache policy, normalized snapshots
+│   ├── ProviderRetryPolicy.swift   Persistent per-provider rate-limit backoff
+│   └── ThresholdNotifier.swift     20% and 0% remaining crossings, and the notifications they become
+├── Providers/
+│   └── *UsageProvider.swift        One adapter per provider, plus GitHubCopilotProvider.swift
+├── Credentials/
+│   ├── ClaudeProfile.swift         ~/.claude-* discovery and per-profile Keychain service names
+│   ├── ClaudeKeychain.swift        Metadata-first Keychain reads and the in-memory credential cache
+│   ├── ProviderSecretCache.swift   The same cache for Antigravity's and cursor-agent's Keychain items
+│   ├── AntigravityCredentials.swift  Antigravity's stored Google token, decoded from its Go keyring format
+│   └── GLMCredentials.swift        Z.ai key discovery across Claude Code, ZCode, and OpenCode
+├── Sessions/
+│   ├── ActivityReader.swift        Opt-in Claude Code, Cursor, Grok Build, Codex, and Antigravity session metadata
+│   ├── AntigravityActivity.swift   Today's model turns counted from local transcripts, when no quota answers
+│   ├── SessionCompletionWatcher.swift  Working-to-idle and working-to-waiting transitions, nothing else
+│   └── SessionChime.swift          The completion sounds, and raising the app that owns a session
+├── Rail/
+│   ├── EdgePanelController.swift   Borderless edge panel, hover ownership, placement, peeks
+│   ├── EdgeViews.swift             Side rail, shared geometry, shapes, logos, and hover attachments
+│   ├── HorizontalRailView.swift    Top and bottom placement
+│   ├── RailSurfaces.swift          Glass and accessible surface rendering
+│   ├── ProviderMeterView.swift     Quota ring and activity badge
+│   ├── UsageDetailCard.swift       Window selection, quota details, and session activity
+│   └── AttachedSettingsView.swift  Compact rail settings
+├── Windows/
+│   ├── ContentView.swift           Settings: Providers, Appearance, Diagnostics, Updates
+│   ├── UsageOverviewView.swift     Keyboard-accessible usage window
+│   └── WhatsNewView.swift          Once-per-version release notes window
+├── Design/
+│   ├── GaugeZBrandStyle.swift      Wordmark font registration and brand styling
+│   └── zyork.otf
+├── Resources/
+│   ├── Assets.xcassets             App icon and template provider logos
+│   └── ThirdPartyNotices.txt       MIT notice for the code adapted from Codenotch, shipped in the bundle
+├── Info.plist
+└── GaugeZ.entitlements             Apple Events automation for Open Grok Build
+Tests/                              Fixture-based provider regression checks
+scripts/test-providers.sh           Compiles the adapters with the checks and runs them
 ```
 
 ## Contributing
@@ -204,8 +239,8 @@ guessed number when the upstream format changes.
 
 ## Thanks
 
-GLM credential discovery and the OpenCode adapter include code adapted from Codenotch (MIT);
-see [Third-party notices](GaugeZ/ThirdPartyNotices.txt).
+The GitHub Copilot ring, the GLM ring, and the Grok and Copilot logos are adapted from
+Codenotch (MIT); see [Third-party notices](GaugeZ/Resources/ThirdPartyNotices.txt).
 
 Design inspiration for the edge rail came from [@hivinz_](https://x.com/hivinz_). Thank you.
 

@@ -267,7 +267,7 @@ enum GrokUsageParser {
     }
 
     private static func window(id: String, label: String, percentage: Double, reset: Date?, duration: Int?) -> UsageWindow {
-        UsageWindow(id: id, label: label, usedPercent: Int(min(100, percentage).rounded()), resetsAt: reset, durationMinutes: duration)
+        UsageWindow(id: id, label: label, usedPercent: min(100, percentage), resetsAt: reset, durationMinutes: duration)
     }
 
     private static func number(_ raw: Any) -> Double? {

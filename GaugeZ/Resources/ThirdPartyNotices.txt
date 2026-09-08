@@ -1,4 +1,4 @@
-Portions of GLMCredentials.swift and OpenCodeUsageProvider.swift are adapted from Codenotch.
+The GitHub Copilot ring, the GLM ring, and the Grok and Copilot logos are adapted from Codenotch.
 
 MIT License
 
