@@ -88,6 +88,30 @@ struct AttachedSettingsView: View {
 
             indicatorColorBlock
 
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Notch Size")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Spacer()
+                    Text("\(Int(round(store.railScale * 100)))%")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.55))
+                    if store.railScale != 1.0 {
+                        Button("Reset", action: store.resetRailScale)
+                        .buttonStyle(.plain)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(Color(red: 0.27, green: 0.58, blue: 1.00))
+                    }
+                }
+                Slider(
+                    value: $store.railScale,
+                    in: 0.70...1.40,
+                    step: 0.05
+                )
+                .controlSize(.small)
+            }
+
             GlassGroup(enabled: store.glassEnabled) {
                 HStack {
                     Button("Refresh", action: store.refresh)

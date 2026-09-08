@@ -58,6 +58,23 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// Scale factor for the meter notch (0.70 = compact, 1.0 = default, 1.40 = spacious).
+    @Published var railScale: Double {
+        didSet {
+            let rounded = (railScale * 100).rounded() / 100
+            let clamped = max(0.70, min(1.40, rounded))
+            if clamped != railScale {
+                railScale = clamped
+            } else {
+                UserDefaults.standard.set(clamped, forKey: Keys.railScale)
+            }
+        }
+    }
+
+    func resetRailScale() {
+        railScale = 1.0
+    }
+
     @Published var selectedDisplayID: String = UserDefaults.standard.string(forKey: "selectedDisplayID") ?? "main" {
         didSet { UserDefaults.standard.set(selectedDisplayID, forKey: "selectedDisplayID") }
     }
@@ -338,6 +355,8 @@ final class UsageStore: ObservableObject {
         indicatorColorHex = UserDefaults.standard.string(forKey: Keys.indicatorColorHex) ?? "#407CDE"
         let savedVertical = UserDefaults.standard.object(forKey: Keys.verticalPosition) as? Double ?? 0.5
         verticalPosition = max(0.0, min(1.0, savedVertical))
+        let savedScale = UserDefaults.standard.object(forKey: Keys.railScale) as? Double ?? 1.0
+        railScale = max(0.70, min(1.40, savedScale))
         if let forced = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_GLASS"] {
             glassEnabled = forced == "1"   // debug aid; not persisted
         }
@@ -415,8 +434,11 @@ final class UsageStore: ObservableObject {
         } : NSScreen.screens.first { DisplayChoice.identifier(for: $0) == selectedDisplayID } ?? NSScreen.screens.first
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
         let length = (edgeSide.isHorizontal ? frame.width : frame.height) - 24
-        let fixed = RailMetrics.shapeHeight(providerCount: 1) - RailMetrics.rowHeight
-        return max(1, Int((length - fixed + RailMetrics.rowSpacing) / (RailMetrics.rowHeight + RailMetrics.rowSpacing)))
+        let scale = CGFloat(railScale)
+        let rowHeight = RailMetrics.rowHeight(scale: scale)
+        let rowSpacing = RailMetrics.rowSpacing(scale: scale)
+        let fixed = RailMetrics.shapeHeight(providerCount: 1, scale: scale) - rowHeight
+        return max(1, Int((length - fixed + rowSpacing) / (rowHeight + rowSpacing)))
     }
 
     var railPageCount: Int { max(1, (visibleProviders.count + railPageCapacity - 1) / railPageCapacity) }
@@ -689,6 +711,7 @@ final class UsageStore: ObservableObject {
         static let glassOpacity = "glassOpacity"
         static let indicatorColorHex = "indicatorColorHex"
         static let verticalPosition = "verticalPosition"
+        static let railScale = "railScale"
     }
 }
 

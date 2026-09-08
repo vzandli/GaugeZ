@@ -139,12 +139,14 @@ final class EdgePanelController {
     /// Screen rects of the drawn, interactive parts: the rail column and, when open, the card column.
     private var interactiveRects: [NSRect] {
         let frame = panel.frame
+        let scale = CGFloat(store.railScale)
         if store.edgeSide.isHorizontal {
             let top = store.edgeSide == .top
             let inset = top ? state.topInset : 0
             let contentTop = frame.maxY - inset
-            let railHeight = state.isExpanded ? HorizontalRailMetrics.depth : RailMetrics.collapsedWidth
-            let railWidth = RailMetrics.shapeHeight(providerCount: store.railProviders.count)
+            let depth = HorizontalRailMetrics.depth(scale: scale)
+            let railHeight = state.isExpanded ? depth : RailMetrics.collapsedWidth
+            let railWidth = RailMetrics.shapeHeight(providerCount: store.railProviders.count, scale: scale)
             let rail = NSRect(x: frame.midX - railWidth / 2,
                               y: top ? contentTop - railHeight : frame.minY,
                               width: railWidth, height: railHeight)
@@ -156,14 +158,14 @@ final class EdgePanelController {
             }
             if state.isExpanded, state.attachment != nil {
                 let width = RailMetrics.attachmentWidth - RailMetrics.pointerDepth
-                let height = min(state.attachmentHeight + HorizontalRailMetrics.cardGap, max(0, frame.height - inset - HorizontalRailMetrics.depth))
+                let height = min(state.attachmentHeight + HorizontalRailMetrics.cardGap, max(0, frame.height - inset - depth))
                 rects.append(NSRect(x: frame.midX - width / 2,
-                                    y: top ? contentTop - HorizontalRailMetrics.depth - height : frame.minY + HorizontalRailMetrics.depth,
+                                    y: top ? contentTop - depth - height : frame.minY + depth,
                                     width: width, height: height))
             }
             return rects
         }
-        let railWidth = state.isExpanded ? RailMetrics.expandedWidth : RailMetrics.collapsedWidth
+        let railWidth = state.isExpanded ? RailMetrics.expandedWidth(scale: scale) : RailMetrics.collapsedWidth
         let railRect = store.edgeSide == .right
             ? NSRect(x: frame.maxX - railWidth, y: frame.minY, width: railWidth, height: frame.height)
             : NSRect(x: frame.minX, y: frame.minY, width: railWidth, height: frame.height)
@@ -360,6 +362,18 @@ final class EdgePanelController {
                         self.setAttachment(nil)
                     }
                     self.positionPanel(animated: true)
+                }
+            }
+            .store(in: &cancellables)
+
+        store.$railScale
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.positionPanel(animated: false)
+                    self?.routePointer()
                 }
             }
             .store(in: &cancellables)
@@ -625,10 +639,11 @@ final class EdgePanelController {
 
     private func dragMoved(screenY: CGFloat) {
         guard isDragging, let screen = preferredScreen else { return }
-        let height = RailMetrics.panelHeight(providerCount: store.railProviders.count)
+        let scale = CGFloat(store.railScale)
+        let height = RailMetrics.panelHeight(providerCount: store.railProviders.count, scale: scale)
         let bounds: (minY: CGFloat, maxY: CGFloat, range: CGFloat)
         if store.edgeSide.isHorizontal {
-            let range = max(0, screen.visibleFrame.width - HorizontalRailMetrics.width(providerCount: store.railProviders.count))
+            let range = max(0, screen.visibleFrame.width - HorizontalRailMetrics.width(providerCount: store.railProviders.count, scale: scale))
             bounds = (screen.visibleFrame.minX, screen.visibleFrame.minX + range, range)
         } else { bounds = verticalBounds(screen: screen, height: height) }
         guard bounds.range > 0 else { return }
@@ -671,6 +686,7 @@ final class EdgePanelController {
         let visibleFrame = screen.visibleFrame
         lastUsableArea = visibleFrame
         let frame: NSRect
+        let scale = CGFloat(store.railScale)
         if store.edgeSide.isHorizontal {
             // On a MacBook's top edge the rail joins the display's own notch: the panel runs up
             // to the screen's real top so the notch is inside it (as the hover target), the
@@ -678,7 +694,7 @@ final class EdgePanelController {
             // notch rather than at the user's chosen position.
             let notch = store.edgeSide == .top ? screen.hardwareNotch : nil
             let inset: CGFloat = notch.map { max($0.height, screen.frame.maxY - visibleFrame.maxY) } ?? 0
-            let width = min(HorizontalRailMetrics.width(providerCount: store.railProviders.count), visibleFrame.width)
+            let width = min(HorizontalRailMetrics.width(providerCount: store.railProviders.count, scale: scale), visibleFrame.width)
             let height = min(620, visibleFrame.height) + inset
             let x = notch != nil
                 ? (screen.frame.midX - width / 2).rounded()
@@ -691,8 +707,8 @@ final class EdgePanelController {
         } else {
             if state.topInset != 0 { state.topInset = 0 }
             if state.joinedNotch != nil { state.joinedNotch = nil }
-            let width = RailMetrics.maximumPanelWidth
-            let height = RailMetrics.panelHeight(providerCount: store.railProviders.count)
+            let width = RailMetrics.maximumPanelWidth(scale: scale)
+            let height = RailMetrics.panelHeight(providerCount: store.railProviders.count, scale: scale)
             let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX
             let bounds = verticalBounds(screen: screen, height: height)
             let y = bounds.minY + bounds.range * CGFloat(store.verticalPosition)

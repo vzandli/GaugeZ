@@ -2,10 +2,10 @@ import SwiftUI
 
 /// Uses the same side-rail geometry rotated into horizontal placement.
 enum HorizontalRailMetrics {
-    static let depth = RailMetrics.expandedWidth
+    static func depth(scale: CGFloat = 1.0) -> CGFloat { RailMetrics.expandedWidth(scale: scale) }
     static let cardGap = RailMetrics.attachmentGap + RailMetrics.pointerDepth
-    static func width(providerCount: Int) -> CGFloat {
-        max(RailMetrics.shapeHeight(providerCount: providerCount), RailMetrics.attachmentWidth + 24)
+    static func width(providerCount: Int, scale: CGFloat = 1.0) -> CGFloat {
+        max(RailMetrics.shapeHeight(providerCount: providerCount, scale: scale), RailMetrics.attachmentWidth + 24)
     }
 }
 
@@ -17,7 +17,9 @@ struct HorizontalRailView: View {
     var body: some View {
         GeometryReader { geometry in
             let top = store.edgeSide == .top
-            let railLength = RailMetrics.shapeHeight(providerCount: store.railProviders.count)
+            let scale = CGFloat(store.railScale)
+            let railLength = RailMetrics.shapeHeight(providerCount: store.railProviders.count, scale: scale)
+            let depth = HorizontalRailMetrics.depth(scale: scale)
             let inset = top ? state.topInset : 0
             let available = geometry.size.height - inset
             ZStack(alignment: top ? .top : .bottom) {
@@ -30,18 +32,18 @@ struct HorizontalRailView: View {
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(width: RailMetrics.attachmentWidth - RailMetrics.pointerDepth,
-                           height: min(state.attachmentHeight, max(0, available - HorizontalRailMetrics.depth - HorizontalRailMetrics.cardGap)))
+                           height: min(state.attachmentHeight, max(0, available - depth - HorizontalRailMetrics.cardGap)))
                     .overlay(alignment: top ? .top : .bottom) {
                         if case .detail(let provider) = attachment {
                             CardPointerView(edge: .right)
                                 .frame(width: RailMetrics.pointerDepth, height: 26)
                                 .rotationEffect(.degrees(top ? -90 : 90))
                                 .frame(width: 26, height: RailMetrics.pointerDepth)
-                                .offset(x: pointerOffset(provider, railLength: railLength),
+                                .offset(x: pointerOffset(provider, railLength: railLength, scale: scale),
                                         y: top ? -RailMetrics.pointerDepth : RailMetrics.pointerDepth)
                         }
                     }
-                    .padding(top ? .top : .bottom, HorizontalRailMetrics.depth + HorizontalRailMetrics.cardGap)
+                    .padding(top ? .top : .bottom, depth + HorizontalRailMetrics.cardGap)
                     .onHover(perform: actions.attachmentHover)
                 }
 
@@ -51,10 +53,10 @@ struct HorizontalRailView: View {
                 EdgeRailView(state: state, providers: store.railProviders, actions: actions,
                              renderingEdge: top ? .right : .left, contentRotation: 90,
                              hidesCollapsedPill: top && state.joinedNotch != nil)
-                    .frame(width: HorizontalRailMetrics.depth, height: railLength,
+                    .frame(width: depth, height: railLength,
                            alignment: top ? .trailing : .leading)
                     .rotationEffect(.degrees(-90))
-                    .frame(width: railLength, height: HorizontalRailMetrics.depth)
+                    .frame(width: railLength, height: depth)
             }
             .frame(width: geometry.size.width, height: max(0, available), alignment: top ? .top : .bottom)
             // The inset band above holds the menu bar and the hardware notch; nothing is drawn in it.
@@ -83,9 +85,9 @@ struct HorizontalRailView: View {
         }
     }
 
-    private func pointerOffset(_ provider: ProviderID, railLength: CGFloat) -> CGFloat {
+    private func pointerOffset(_ provider: ProviderID, railLength: CGFloat, scale: CGFloat = 1.0) -> CGFloat {
         let index = store.railProviders.firstIndex(of: provider) ?? 0
-        let center = RailMetrics.rowCenterY(index: index)
+        let center = RailMetrics.rowCenterY(index: index, scale: scale)
         let maximum = (RailMetrics.attachmentWidth - RailMetrics.pointerDepth) / 2 - 28
         return max(-maximum, min(maximum, center - railLength / 2))
     }

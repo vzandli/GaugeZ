@@ -24,6 +24,18 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.7",
+            headline: "The notch is yours to size.",
+            changes: [
+                .init("Resize the notch by dragging its inner edge",
+                      "Grab the strip along the notch's inner edge and pull. It snaps to the default size with a tap, and a double-click resets it."),
+                .init("Or set it in Settings",
+                      "A Notch Size slider in Settings → Appearance and in the rail's own settings card, from 70% to 140%."),
+                .init("Everything scales together",
+                      "Rings, labels, the settings button, and how many rings fit a page all follow the size, on every edge.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.6",
             headline: "GitHub Copilot joins the rail, limits can tell you before they bite, and sessions say when they finish.",
             changes: [

@@ -530,6 +530,33 @@ private struct AppearanceSettingsPage: View {
                     SettingsRowDivider()
 
                     SettingsControlRow(
+                        title: "Notch size",
+                        subtitle: "Use the slider or drag the notch's inner edge"
+                    ) {
+                        HStack(spacing: 8) {
+                            Slider(
+                                value: $store.railScale,
+                                in: 0.70...1.40,
+                                step: 0.05
+                            )
+                            .frame(width: 120)
+                            .controlSize(.small)
+
+                            Text("\(Int(round(store.railScale * 100)))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(SettingsPalette.secondary)
+                                .frame(width: 38, alignment: .trailing)
+
+                            Button("Reset", action: store.resetRailScale)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(store.railScale == 1.0)
+                        }
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsControlRow(
                         title: "Surface",
                         subtitle: "Choose the rail material"
                     ) {

@@ -38,54 +38,71 @@ struct EdgePanelActions {
 
 /// Geometry shared by the views and the window controller. Points.
 enum RailMetrics {
-    static let expandedWidth: CGFloat = 76
+    static let baseExpandedWidth: CGFloat = 76
+    static let baseRingSize: CGFloat = 44
+    static let baseRingLineWidth: CGFloat = 4
+    static let baseRingLabelGap: CGFloat = 5
+    static let baseLabelHeight: CGFloat = 16
+    static let baseRowSpacing: CGFloat = 14
+    static let baseBodyTopInset: CGFloat = 16
+    static let baseBodyBottomInset: CGFloat = 14
+    static let baseShoulderHeight: CGFloat = 46
+    static let baseFootHeight: CGFloat = 46
+    static let baseBodyCornerRadius: CGFloat = 30
+
     static let collapsedWidth: CGFloat = 14
-    static let ringSize: CGFloat = 44
-    static let ringLineWidth: CGFloat = 4
-    static let ringLabelGap: CGFloat = 5
-    static let labelHeight: CGFloat = 16
-    static let rowSpacing: CGFloat = 14
-    static let rowHeight: CGFloat = ringSize + ringLabelGap + labelHeight
-    static let bodyTopInset: CGFloat = 16
-    static let bodyBottomInset: CGFloat = 14
-    static let shoulderHeight: CGFloat = 46
-    static let footHeight: CGFloat = 46
-    static let gearButtonSize: CGFloat = 42
-    static let gearZoneHeight: CGFloat = 46
-    static let gearOverlap: CGFloat = 10
+    static let resizeGripWidth: CGFloat = 8
+    static let baseGearButtonSize: CGFloat = 42
+    static let baseGearZoneHeight: CGFloat = 46
+    static let baseGearOverlap: CGFloat = 10
+    static let baseGearIconSize: CGFloat = 17
     static let attachmentWidth: CGFloat = 370
     static let attachmentGap: CGFloat = 8
     static let pointerDepth: CGFloat = 12
-    static let bodyCornerRadius: CGFloat = 30
 
-    static var hookHeight: CGFloat {
-        footHeight + gearZoneHeight - gearOverlap
+    static func expandedWidth(scale: CGFloat = 1.0) -> CGFloat { (baseExpandedWidth * scale).rounded() }
+    static func ringSize(scale: CGFloat = 1.0) -> CGFloat { (baseRingSize * scale).rounded() }
+    static func ringLineWidth(scale: CGFloat = 1.0) -> CGFloat { max(2.5, baseRingLineWidth * scale) }
+    static func ringLabelGap(scale: CGFloat = 1.0) -> CGFloat { (baseRingLabelGap * scale).rounded() }
+    static func labelHeight(scale: CGFloat = 1.0) -> CGFloat { (baseLabelHeight * scale).rounded() }
+    static func rowSpacing(scale: CGFloat = 1.0) -> CGFloat { (baseRowSpacing * scale).rounded() }
+    static func rowHeight(scale: CGFloat = 1.0) -> CGFloat {
+        ringSize(scale: scale) + ringLabelGap(scale: scale) + labelHeight(scale: scale)
     }
+    static func bodyTopInset(scale: CGFloat = 1.0) -> CGFloat { (baseBodyTopInset * scale).rounded() }
+    static func bodyBottomInset(scale: CGFloat = 1.0) -> CGFloat { (baseBodyBottomInset * scale).rounded() }
+    static func shoulderHeight(scale: CGFloat = 1.0) -> CGFloat { (baseShoulderHeight * scale).rounded() }
+    static func footHeight(scale: CGFloat = 1.0) -> CGFloat { (baseFootHeight * scale).rounded() }
+    static func bodyCornerRadius(scale: CGFloat = 1.0) -> CGFloat { (baseBodyCornerRadius * scale).rounded() }
+    static func gearButtonSize(scale: CGFloat = 1.0) -> CGFloat { (baseGearButtonSize * scale).rounded() }
+    static func gearZoneHeight(scale: CGFloat = 1.0) -> CGFloat { (baseGearZoneHeight * scale).rounded() }
+    static func gearOverlap(scale: CGFloat = 1.0) -> CGFloat { (baseGearOverlap * scale).rounded() }
+    static func gearIconSize(scale: CGFloat = 1.0) -> CGFloat { (baseGearIconSize * scale).rounded() }
 
     /// Widest the panel ever needs to be: rail plus an attachment.
-    static let maximumPanelWidth: CGFloat = expandedWidth + attachmentGap + attachmentWidth + pointerDepth
+    static func maximumPanelWidth(scale: CGFloat = 1.0) -> CGFloat {
+        expandedWidth(scale: scale) + attachmentGap + attachmentWidth + pointerDepth
+    }
 
-    static func bodyHeight(providerCount: Int) -> CGFloat {
+    static func bodyHeight(providerCount: Int, scale: CGFloat = 1.0) -> CGFloat {
         let rows = CGFloat(max(providerCount, 1))
-        return bodyTopInset + rows * rowHeight + (rows - 1) * rowSpacing + bodyBottomInset
+        return bodyTopInset(scale: scale) + rows * rowHeight(scale: scale) + (rows - 1) * rowSpacing(scale: scale) + bodyBottomInset(scale: scale)
     }
 
-    static func notchHeight(providerCount: Int) -> CGFloat {
-        shoulderHeight + bodyHeight(providerCount: providerCount) + footHeight
+    static func notchHeight(providerCount: Int, scale: CGFloat = 1.0) -> CGFloat {
+        shoulderHeight(scale: scale) + bodyHeight(providerCount: providerCount, scale: scale) + footHeight(scale: scale)
     }
 
-    static func shapeHeight(providerCount: Int) -> CGFloat {
-        notchHeight(providerCount: providerCount) + gearZoneHeight - gearOverlap
+    static func shapeHeight(providerCount: Int, scale: CGFloat = 1.0) -> CGFloat {
+        notchHeight(providerCount: providerCount, scale: scale) + gearZoneHeight(scale: scale) - gearOverlap(scale: scale)
     }
 
-    /// Window height: exact match to shapeHeight.
-    static func panelHeight(providerCount: Int) -> CGFloat {
-        shapeHeight(providerCount: providerCount)
+    static func panelHeight(providerCount: Int, scale: CGFloat = 1.0) -> CGFloat {
+        shapeHeight(providerCount: providerCount, scale: scale)
     }
 
-    /// Vertical center of a provider row, measured from the top of the rail shape.
-    static func rowCenterY(index: Int) -> CGFloat {
-        shoulderHeight + bodyTopInset + CGFloat(index) * (rowHeight + rowSpacing) + ringSize / 2
+    static func rowCenterY(index: Int, scale: CGFloat = 1.0) -> CGFloat {
+        shoulderHeight(scale: scale) + bodyTopInset(scale: scale) + CGFloat(index) * (rowHeight(scale: scale) + rowSpacing(scale: scale)) + ringSize(scale: scale) / 2
     }
 }
 
@@ -107,7 +124,11 @@ struct EdgePanelContentView: View {
     private var verticalContent: some View {
         let edge = store.edgeSide
         let providers = store.railProviders
-        let shapeHeight = RailMetrics.shapeHeight(providerCount: providers.count)
+        let scale = CGFloat(store.railScale)
+        let shapeHeight = RailMetrics.shapeHeight(providerCount: providers.count, scale: scale)
+        let panelHeight = RailMetrics.panelHeight(providerCount: providers.count, scale: scale)
+        let maxPanelWidth = RailMetrics.maximumPanelWidth(scale: scale)
+        let expandedWidth = RailMetrics.expandedWidth(scale: scale)
 
         let edgeAlignment: Alignment = edge == .right ? .topTrailing : .topLeading
 
@@ -123,9 +144,10 @@ struct EdgePanelContentView: View {
                     providers: providers,
                     shapeHeight: shapeHeight,
                     edge: edge,
+                    scale: scale,
                     actions: actions
                 )
-                .padding(edge == .right ? .trailing : .leading, RailMetrics.expandedWidth + RailMetrics.attachmentGap)
+                .padding(edge == .right ? .trailing : .leading, expandedWidth + RailMetrics.attachmentGap)
             }
 
             rail(providers: providers)
@@ -135,8 +157,8 @@ struct EdgePanelContentView: View {
         // non-activating panel it rendered nothing at all.
         // The window is always exactly this size, so layout never depends on a resize.
         return layers
-            .frame(width: RailMetrics.maximumPanelWidth, height: shapeHeight, alignment: edgeAlignment)
-            .frame(width: RailMetrics.maximumPanelWidth, height: RailMetrics.panelHeight(providerCount: providers.count), alignment: edge == .right ? .trailing : .leading)
+            .frame(width: maxPanelWidth, height: shapeHeight, alignment: edgeAlignment)
+            .frame(width: maxPanelWidth, height: panelHeight, alignment: edge == .right ? .trailing : .leading)
             .environment(\.colorScheme, .dark)
     }
 
@@ -150,6 +172,7 @@ struct EdgePanelContentView: View {
 struct RailDragHandle: View {
     @EnvironmentObject private var store: UsageStore
     let actions: EdgePanelActions
+    var scale: CGFloat = 1.0
     @State private var isHovered = false
     @State private var isDragging = false
 
@@ -181,7 +204,7 @@ struct RailDragHandle: View {
             }
             .allowsHitTesting(false)
         }
-        .frame(width: RailMetrics.expandedWidth, height: RailMetrics.shoulderHeight + RailMetrics.bodyTopInset)
+        .frame(width: RailMetrics.expandedWidth(scale: scale), height: RailMetrics.shoulderHeight(scale: scale) + RailMetrics.bodyTopInset(scale: scale))
         .overlay(alignment: .bottom) {
             if store.railPageCount > 1 {
                 Button {
@@ -312,6 +335,221 @@ private final class DragGripNSView: NSView {
     }
 }
 
+// MARK: - Notch resize handle
+
+/// Drag grip along the notch's inner edge. Direction and cursor follow the real screen edge,
+/// not the rendering edge, so the same view works inside the rotated horizontal rail.
+struct RailResizeHandle: View {
+    @EnvironmentObject private var store: UsageStore
+    /// Scale band around 1.0 where the drag snaps to the default size.
+    private static let snapBand = 0.05
+    @State private var isHovered = false
+    @State private var isResizing = false
+    @State private var startScale: Double = 1.0
+    @State private var initialLocation: NSPoint = .zero
+    @State private var hasHapticSnapped = false
+
+    var body: some View {
+        let side = store.edgeSide
+        return ZStack {
+            NativeResizeGrip(
+                edge: side,
+                onResizeStart: { startPoint in
+                    isResizing = true
+                    startScale = store.railScale
+                    initialLocation = startPoint
+                    // Already at the default: don't tap on the first pixel of movement.
+                    hasHapticSnapped = abs(startScale - 1.0) < Self.snapBand
+                },
+                onResizeMove: { currentPoint in
+                    let baseWidth = RailMetrics.baseExpandedWidth
+                    let delta: CGFloat
+                    switch side {
+                    case .right:
+                        // Dragging left (decreasing X) increases size
+                        delta = initialLocation.x - currentPoint.x
+                    case .left:
+                        // Dragging right (increasing X) increases size
+                        delta = currentPoint.x - initialLocation.x
+                    case .top:
+                        // In macOS screen coords, 0 is bottom. Dragging down (decreasing Y) increases size
+                        delta = initialLocation.y - currentPoint.y
+                    case .bottom:
+                        // Dragging up (increasing Y) increases size
+                        delta = currentPoint.y - initialLocation.y
+                    }
+                    let scaleDelta = delta / baseWidth
+                    var targetScale = startScale + Double(scaleDelta)
+
+                    // Snap to 1.0 (default) with haptic feedback
+                    if abs(targetScale - 1.0) < Self.snapBand {
+                        targetScale = 1.0
+                        if !hasHapticSnapped {
+                            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                            hasHapticSnapped = true
+                        }
+                    } else {
+                        hasHapticSnapped = false
+                    }
+
+                    store.railScale = max(0.70, min(1.40, targetScale))
+                },
+                onResizeEnd: {
+                    isResizing = false
+                },
+                onDoubleClick: {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                    store.resetRailScale()
+                },
+                onHover: { inside in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        isHovered = inside
+                    }
+                }
+            )
+
+            // Faint visual affordance along the inner edge
+            Capsule()
+                .fill(Color.white.opacity(isResizing ? 0.38 : (isHovered ? 0.22 : 0.0)))
+                .frame(width: 3, height: 32)
+                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isHovered)
+                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isResizing)
+                .allowsHitTesting(false)
+        }
+        .help("Drag to resize meter notch (Double-click to reset)")
+    }
+}
+
+private struct NativeResizeGrip: NSViewRepresentable {
+    let edge: EdgeSide
+    let onResizeStart: (NSPoint) -> Void
+    let onResizeMove: (NSPoint) -> Void
+    let onResizeEnd: () -> Void
+    let onDoubleClick: () -> Void
+    let onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ResizeGripNSView {
+        let view = ResizeGripNSView(edge: edge)
+        view.onResizeStart = onResizeStart
+        view.onResizeMove = onResizeMove
+        view.onResizeEnd = onResizeEnd
+        view.onDoubleClick = onDoubleClick
+        view.onHover = onHover
+        return view
+    }
+
+    func updateNSView(_ nsView: ResizeGripNSView, context: Context) {
+        nsView.edge = edge
+        nsView.onResizeStart = onResizeStart
+        nsView.onResizeMove = onResizeMove
+        nsView.onResizeEnd = onResizeEnd
+        nsView.onDoubleClick = onDoubleClick
+        nsView.onHover = onHover
+    }
+}
+
+private final class ResizeGripNSView: NSView {
+    var edge: EdgeSide
+    var onResizeStart: ((NSPoint) -> Void)?
+    var onResizeMove: ((NSPoint) -> Void)?
+    var onResizeEnd: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
+    var onHover: ((Bool) -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+    private var isResizing = false
+    private var cursorPushed = false
+
+    init(edge: EdgeSide) {
+        self.edge = edge
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    /// The window-edge resize cursor pointing at the edge being dragged; plain two-headed
+    /// arrows before macOS 15. Pushed on hover rather than via cursor rects, which AppKit only
+    /// honours in the key window and this non-activating panel never becomes key.
+    private var resizeCursor: NSCursor {
+        if #available(macOS 15, *) {
+            let position: NSCursor.FrameResizePosition
+            switch edge {
+            case .right: position = .left
+            case .left: position = .right
+            case .top: position = .bottom
+            case .bottom: position = .top
+            }
+            return .frameResize(position: position, directions: .all)
+        }
+        return edge.isHorizontal ? .resizeUpDown : .resizeLeftRight
+    }
+
+    private func showResizeCursor() {
+        guard !cursorPushed else { return }
+        resizeCursor.push()
+        cursorPushed = true
+    }
+
+    private func restoreCursor() {
+        guard cursorPushed else { return }
+        NSCursor.pop()
+        cursorPushed = false
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        showResizeCursor()
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard !isResizing else { return }
+        restoreCursor()
+        onHover?(false)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 {
+            onDoubleClick?()
+            return
+        }
+        isResizing = true
+        showResizeCursor()
+        onHover?(true)
+        onResizeStart?(NSEvent.mouseLocation)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isResizing else { return }
+        onResizeMove?(NSEvent.mouseLocation)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isResizing else { return }
+        isResizing = false
+        let isInside = bounds.contains(convert(event.locationInWindow, from: nil))
+        if !isInside { restoreCursor() }
+        onHover?(isInside)
+        onResizeEnd?()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { restoreCursor() }
+    }
+}
+
 // MARK: - Rail
 
 struct EdgeRailView: View {
@@ -330,20 +568,32 @@ struct EdgeRailView: View {
     var body: some View {
         let edge = renderingEdge ?? store.edgeSide
         let expanded = state.isExpanded
-        let width = expanded ? RailMetrics.expandedWidth : RailMetrics.collapsedWidth
+        let scale = CGFloat(store.railScale)
+        let expandedWidth = RailMetrics.expandedWidth(scale: scale)
+        let width = expanded ? expandedWidth : RailMetrics.collapsedWidth
+        let notchHeight = RailMetrics.notchHeight(providerCount: providers.count, scale: scale)
 
         ZStack(alignment: edge == .right ? .topTrailing : .topLeading) {
             Color.clear
 
             if expanded {
-                railSurface(edge: edge)
-                    .frame(width: RailMetrics.expandedWidth, height: RailMetrics.notchHeight(providerCount: providers.count))
+                railSurface(edge: edge, scale: scale)
+                    .frame(width: expandedWidth, height: notchHeight)
 
-                gearZone(edge: edge)
-                    .offset(y: RailMetrics.notchHeight(providerCount: providers.count) - RailMetrics.gearOverlap - 25)
+                gearZone(edge: edge, scale: scale)
+                    .offset(y: notchHeight - RailMetrics.gearOverlap(scale: scale) - (25 * scale).rounded())
 
-                expandedContent
+                expandedContent(scale: scale)
                     .transition(.opacity.animation(.easeOut(duration: 0.12).delay(0.02)))
+
+                // Resize grip on the inner notch edge, limited to the straight body section so it
+                // doesn't sit over the shoulder curve or the drag handle. It's a native view, so
+                // AppKit hit-tests it before any SwiftUI content regardless of z-order: keep it
+                // narrow enough to stay inside the meter rows' side margin.
+                RailResizeHandle()
+                    .frame(width: RailMetrics.resizeGripWidth, height: RailMetrics.bodyHeight(providerCount: providers.count, scale: scale))
+                    .padding(.top, RailMetrics.shoulderHeight(scale: scale))
+                    .frame(maxWidth: .infinity, alignment: edge == .right ? .leading : .trailing)
             } else if !hidesCollapsedPill {
                 collapsedPill(edge: edge)
                     .transition(.opacity.animation(.easeOut(duration: 0.12)))
@@ -362,11 +612,11 @@ struct EdgeRailView: View {
         .accessibilityLabel("GaugeZ usage rail")
     }
 
-    private var expandedContent: some View {
+    private func expandedContent(scale: CGFloat) -> some View {
         VStack(spacing: 0) {
-            RailDragHandle(actions: actions)
+            RailDragHandle(actions: actions, scale: scale)
 
-            VStack(spacing: RailMetrics.rowSpacing) {
+            VStack(spacing: RailMetrics.rowSpacing(scale: scale)) {
                 ForEach(Array(providers.enumerated()), id: \.element) { index, provider in
                     ProviderMeterView(
                         snapshot: store.snapshot(for: provider),
@@ -382,7 +632,7 @@ struct EdgeRailView: View {
             }
 
         }
-        .frame(width: RailMetrics.expandedWidth)
+        .frame(width: RailMetrics.expandedWidth(scale: scale))
     }
 
     private var gearHighlighted: Bool {
@@ -391,24 +641,25 @@ struct EdgeRailView: View {
 
     /// The body: Liquid Glass tinted near-black, or solid black with a hairline outline.
     @ViewBuilder
-    private func railSurface(edge: EdgeSide) -> some View {
+    private func railSurface(edge: EdgeSide, scale: CGFloat) -> some View {
         if store.glassEnabled {
             RailGlass.Frosted(
-                shape: EdgeNotchShape(edge: edge),
+                shape: EdgeNotchShape(edge: edge, scale: scale),
                 glassOpacity: store.glassOpacity,
                 tint: RailGlass.railTint(opacity: store.glassOpacity)
             )
         } else {
-            EdgeNotchShape(edge: edge)
+            EdgeNotchShape(edge: edge, scale: scale)
                 .fill(Color(white: 0.02).opacity(0.98))
-            EdgeNotchOutline(edge: edge)
+            EdgeNotchOutline(edge: edge, scale: scale)
                 .stroke(.white.opacity(0.13), lineWidth: 1)
         }
     }
 
     /// Round settings button below the body, brightening while hovered or while settings are open.
-    private func gearZone(edge: EdgeSide) -> some View {
+    private func gearZone(edge: EdgeSide, scale: CGFloat) -> some View {
         let isOpen = state.attachment == .settings
+        let buttonSize = RailMetrics.gearButtonSize(scale: scale)
         return Button(action: actions.settingsToggle) {
             ZStack {
                 // Subtle glass specular ring when active/hovered
@@ -424,11 +675,11 @@ struct EdgeRailView: View {
                         ),
                         lineWidth: 1
                     )
-                    .frame(width: RailMetrics.gearButtonSize, height: RailMetrics.gearButtonSize)
+                    .frame(width: buttonSize, height: buttonSize)
 
                 // Mechanical rotating gear icon
                 Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: RailMetrics.gearIconSize(scale: scale), weight: .medium))
                     .foregroundStyle(.white.opacity(gearHighlighted ? 1.0 : 0.68))
                     .rotationEffect(.degrees(contentRotation + (isOpen ? 90 : (gearZoneHovered ? 45 : 0))))
                     .scaleEffect(isOpen ? 1.15 : (gearZoneHovered ? 1.10 : 1.0))
@@ -436,7 +687,7 @@ struct EdgeRailView: View {
                     .animation(.spring(response: 0.32, dampingFraction: 0.68), value: gearZoneHovered)
                     .animation(.spring(response: 0.35, dampingFraction: 0.70), value: isOpen)
             }
-            .frame(width: RailMetrics.gearButtonSize, height: RailMetrics.gearButtonSize)
+            .frame(width: buttonSize, height: buttonSize)
             // No shadow: the rail body it sits under has none, and the rail clips at its edges.
             .modifier(RailGlass.Surface(
                 shape: Circle(),
@@ -462,8 +713,8 @@ struct EdgeRailView: View {
                 Label("Quit", systemImage: "power")
             }
         }
-        .frame(width: RailMetrics.expandedWidth, height: RailMetrics.gearZoneHeight, alignment: .top)
-        .padding(.top, 3)
+        .frame(width: RailMetrics.expandedWidth(scale: scale), height: RailMetrics.gearZoneHeight(scale: scale), alignment: .top)
+        .padding(.top, (3 * scale).rounded())
         .contentShape(Rectangle())
         .onHover { inside in
             withAnimation(.spring(response: 0.28, dampingFraction: 0.70)) {
@@ -500,7 +751,7 @@ struct EdgeRailView: View {
         )
         .padding(edge == .right ? .trailing : .leading, 2)
         .frame(maxWidth: .infinity, alignment: edge == .right ? .trailing : .leading)
-        .padding(.top, (RailMetrics.shapeHeight(providerCount: providers.count) - totalHeight) / 2)
+        .padding(.top, (RailMetrics.shapeHeight(providerCount: providers.count, scale: CGFloat(store.railScale)) - totalHeight) / 2)
     }
 }
 
@@ -513,6 +764,7 @@ private struct AttachmentColumn: View {
     let providers: [ProviderID]
     let shapeHeight: CGFloat
     let edge: EdgeSide
+    var scale: CGFloat = 1.0
     let actions: EdgePanelActions
 
     @State private var contentHeight: CGFloat = 120
@@ -580,7 +832,7 @@ private struct AttachmentColumn: View {
         switch attachment {
         case .detail(let provider):
             let index = providers.firstIndex(of: provider) ?? 0
-            return RailMetrics.rowCenterY(index: index)
+            return RailMetrics.rowCenterY(index: index, scale: scale)
         case .settings:
             return shapeHeight / 2
         }
@@ -594,9 +846,10 @@ private struct AttachmentColumn: View {
 /// right edge and mirrored for the left.
 struct EdgeNotchShape: Shape {
     let edge: EdgeSide
+    var scale: CGFloat = 1.0
 
     func path(in rect: CGRect) -> Path {
-        var path = EdgeNotchOutline.outline(in: rect)
+        var path = EdgeNotchOutline.outline(in: rect, scale: scale)
         path.closeSubpath()
         return edge == .left ? path.mirrored(in: rect) : path
     }
@@ -606,16 +859,17 @@ struct EdgeNotchShape: Shape {
 /// hairline border.
 struct EdgeNotchOutline: Shape {
     let edge: EdgeSide
+    var scale: CGFloat = 1.0
 
     func path(in rect: CGRect) -> Path {
-        let path = Self.outline(in: rect)
+        let path = Self.outline(in: rect, scale: scale)
         return edge == .left ? path.mirrored(in: rect) : path
     }
 
-    static func outline(in rect: CGRect) -> Path {
-        let shoulder = RailMetrics.shoulderHeight
-        let foot = RailMetrics.footHeight
-        let corner = min(RailMetrics.bodyCornerRadius, rect.width / 2)
+    static func outline(in rect: CGRect, scale: CGFloat = 1.0) -> Path {
+        let shoulder = RailMetrics.shoulderHeight(scale: scale)
+        let foot = RailMetrics.footHeight(scale: scale)
+        let corner = min(RailMetrics.bodyCornerRadius(scale: scale), rect.width / 2)
         let bodyTop = rect.minY + shoulder
         let bodyBottom = rect.maxY - foot
         let inner = rect.minX

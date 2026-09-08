@@ -13,57 +13,64 @@ struct ProviderMeterView: View {
     @State private var revealed = false
 
     var body: some View {
-        Button {
+        let scale = CGFloat(store.railScale)
+        let ringSize = RailMetrics.ringSize(scale: scale)
+        let lineWidth = RailMetrics.ringLineWidth(scale: scale)
+        let logoSize = max(12.0, (18.0 * scale).rounded())
+        let fontSize = max(9.0, (13.0 * scale).rounded())
+        let badgeScale = max(0.75, min(1.25, scale))
+
+        return Button {
             onSelect(NSEvent.modifierFlags.contains(.option))
         } label: {
-            VStack(spacing: RailMetrics.ringLabelGap) {
+            VStack(spacing: RailMetrics.ringLabelGap(scale: scale)) {
                 ZStack {
                     Circle()
-                        .stroke(snapshot.remainingPercent == 0 ? Color.red : .white.opacity(0.13), lineWidth: RailMetrics.ringLineWidth)
+                        .stroke(snapshot.remainingPercent == 0 ? Color.red : .white.opacity(0.13), lineWidth: lineWidth)
 
                     if let remaining = snapshot.remainingPercent {
                         Circle()
                             .trim(from: 0, to: revealed ? CGFloat(remaining) / 100 : 0)
                             .stroke(
                                 Color.quota(remainingPercent: remaining),
-                                style: StrokeStyle(lineWidth: RailMetrics.ringLineWidth, lineCap: .round)
+                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                             )
                             .rotationEffect(.degrees(-90))
                     }
 
-                    ProviderLogo(provider: snapshot.provider, size: 18)
+                    ProviderLogo(provider: snapshot.provider, size: logoSize)
                         .foregroundStyle(.white.opacity(hasValue ? 0.95 : 0.4))
 
                     if let activity = knownActivity {
                         Image(systemName: activity.state == .waiting ? "hand.raised.fill" : (activity.state == .working ? "bolt.fill" : "minus"))
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: 9 * badgeScale, weight: .bold))
                             .foregroundStyle(activity.state == .waiting ? .orange : .white)
-                            .padding(4)
+                            .padding(4 * badgeScale)
                             .background(.black, in: Circle())
-                            .offset(x: -17, y: -16)
+                            .offset(x: -17 * scale, y: -16 * scale)
                             .symbolEffect(.pulse, options: .repeating, isActive: activity.state == .working && !reduceMotion)
                             .accessibilityLabel(activity.state.rawValue)
                     }
                     if let badge = statusBadge {
                         Image(systemName: badge)
-                            .font(.system(size: 8, weight: .bold))
+                            .font(.system(size: 8 * badgeScale, weight: .bold))
                             .foregroundStyle(.black)
-                            .frame(width: 14, height: 14)
+                            .frame(width: 14 * badgeScale, height: 14 * badgeScale)
                             .background(Color.orange, in: Circle())
-                            .offset(x: 16, y: -16)
+                            .offset(x: 16 * scale, y: -16 * scale)
                     }
                 }
-                .frame(width: RailMetrics.ringSize, height: RailMetrics.ringSize)
+                .frame(width: ringSize, height: ringSize)
                 .scaleEffect(isHighlighted ? 1.06 : 1)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: snapshot.remainingPercent)
 
                 Text(valueLabel)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: fontSize, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(hasValue ? 1 : 0.55))
-                    .frame(height: RailMetrics.labelHeight)
+                    .frame(height: RailMetrics.labelHeight(scale: scale))
             }
-            .frame(width: RailMetrics.expandedWidth - 12, height: RailMetrics.rowHeight)
+            .frame(width: max(36, RailMetrics.expandedWidth(scale: scale) - 12), height: RailMetrics.rowHeight(scale: scale))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
