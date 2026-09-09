@@ -254,10 +254,10 @@ enum CursorUsageParser {
         if !plan.isEmpty, (plan["enabled"] as? Bool) != false {
             let unlimited = (object["isUnlimited"] as? Bool) ?? false
             if let percent = (plan["totalPercentUsed"] as? NSNumber)?.doubleValue {
-                windows.append(try window(id: "cursor-plan", label: "Plan usage", usedPercent: percent, resetsAt: cycleEnd))
+                windows.append(try window(id: "cursor-plan", label: String(localized: "Plan usage", bundle: .language), usedPercent: percent, resetsAt: cycleEnd))
             } else if let used = (plan["used"] as? NSNumber)?.doubleValue,
                       let limit = (plan["limit"] as? NSNumber)?.doubleValue, limit > 0 {
-                windows.append(try window(id: "cursor-plan", label: "Plan usage", usedPercent: used / limit * 100, resetsAt: cycleEnd))
+                windows.append(try window(id: "cursor-plan", label: String(localized: "Plan usage", bundle: .language), usedPercent: used / limit * 100, resetsAt: cycleEnd))
             } else if !unlimited {
                 throw CursorProviderError.malformedResponse
             }
@@ -267,7 +267,7 @@ enum CursorUsageParser {
            (onDemand["enabled"] as? Bool) == true,
            let used = (onDemand["used"] as? NSNumber)?.doubleValue,
            let limit = (onDemand["limit"] as? NSNumber)?.doubleValue, limit > 0 {
-            windows.append(try window(id: "cursor-on-demand", label: "On-demand spend", usedPercent: used / limit * 100, resetsAt: cycleEnd))
+            windows.append(try window(id: "cursor-on-demand", label: String(localized: "On-demand spend", bundle: .language), usedPercent: used / limit * 100, resetsAt: cycleEnd))
         }
 
         let team = object["teamUsage"] as? [String: Any] ?? [:]
@@ -304,7 +304,7 @@ enum CursorUsageParser {
         if let start = (object["startOfMonth"] as? String).flatMap(parseDate) {
             resetsAt = Calendar.current.date(byAdding: .month, value: 1, to: start)
         }
-        let window = try window(id: "cursor-premium-requests", label: "Premium requests", usedPercent: used / limit * 100, resetsAt: resetsAt)
+        let window = try window(id: "cursor-premium-requests", label: String(localized: "Premium requests", bundle: .language), usedPercent: used / limit * 100, resetsAt: resetsAt)
         return UsageSnapshot(
             provider: .cursor,
             accountID: account,
@@ -358,24 +358,24 @@ enum CursorProviderError: LocalizedError, ProviderHealthDescribing {
 
     var errorDescription: String? {
         switch self {
-        case .notInstalled: "Cursor is not installed."
-        case .notSignedIn: "Cursor is not signed in. Run cursor-agent login or sign in inside Cursor, then refresh."
-        case .stateUnreadable: "Cursor's local state could not be read."
-        case .malformedSession: "Cursor's sign-in has an unsupported format."
-        case .sessionExpired: "Cursor's sign-in has expired. Open Cursor or run cursor-agent login, then retry."
-        case .unauthorized: "Cursor rejected the local sign-in. Sign in inside Cursor again."
-        case .rateLimited: "Cursor asked GaugeZ to slow down."
-        case .offline(let detail): "Cursor could not be reached: \(detail)"
-        case .server(let status): "Cursor returned a server error (\(status))."
-        case .unexpectedStatus(let status): "Cursor returned an unexpected response (\(status))."
-        case .malformedResponse: "Cursor returned an unsupported usage response. Open the Cursor dashboard instead."
-        case .unsupportedSummary: "Cursor's usage summary changed shape."
-        case .unlimited: "Cursor reports no usage limit for this plan."
+        case .notInstalled: String(localized: "Cursor is not installed.", bundle: .language)
+        case .notSignedIn: String(localized: "Cursor is not signed in. Run cursor-agent login or sign in inside Cursor, then refresh.", bundle: .language)
+        case .stateUnreadable: String(localized: "Cursor's local state could not be read.", bundle: .language)
+        case .malformedSession: String(localized: "Cursor's sign-in has an unsupported format.", bundle: .language)
+        case .sessionExpired: String(localized: "Cursor's sign-in has expired. Open Cursor or run cursor-agent login, then retry.", bundle: .language)
+        case .unauthorized: String(localized: "Cursor rejected the local sign-in. Sign in inside Cursor again.", bundle: .language)
+        case .rateLimited: String(localized: "Cursor asked GaugeZ to slow down.", bundle: .language)
+        case .offline(let detail): String(localized: "Cursor could not be reached: \(detail)", bundle: .language)
+        case .server(let status): String(localized: "Cursor returned a server error (\(status)).", bundle: .language)
+        case .unexpectedStatus(let status): String(localized: "Cursor returned an unexpected response (\(status)).", bundle: .language)
+        case .malformedResponse: String(localized: "Cursor returned an unsupported usage response. Open the Cursor dashboard instead.", bundle: .language)
+        case .unsupportedSummary: String(localized: "Cursor's usage summary changed shape.", bundle: .language)
+        case .unlimited: String(localized: "Cursor reports no usage limit for this plan.", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let message = errorDescription ?? "Unknown Cursor error"
+        let message = errorDescription ?? String(localized: "Unknown Cursor error", bundle: .language)
         switch self {
         case .notSignedIn, .sessionExpired, .unauthorized: return .signedOut(message)
         case .rateLimited, .offline, .server: return .stale(message)

@@ -525,12 +525,12 @@ enum ClaudeUsageParser {
 
     private static func describe(key: String) -> (label: String, order: Int, durationMinutes: Int?) {
         switch key {
-        case "five_hour": return ("5-hour limit", 0, 300)
-        case "seven_day": return ("Weekly limit", 1, 10_080)
-        case "seven_day_opus": return ("Weekly Opus limit", 2, 10_080)
-        case "seven_day_sonnet": return ("Weekly Sonnet limit", 3, 10_080)
-        case "seven_day_oauth_apps": return ("Weekly connected apps", 4, 10_080)
-        case "extra_usage": return ("Extra usage", 9, nil)
+        case "five_hour": return (String(localized: "5-hour limit", bundle: .language), 0, 300)
+        case "seven_day": return (String(localized: "Weekly limit", bundle: .language), 1, 10_080)
+        case "seven_day_opus": return (String(localized: "Weekly Opus limit", bundle: .language), 2, 10_080)
+        case "seven_day_sonnet": return (String(localized: "Weekly Sonnet limit", bundle: .language), 3, 10_080)
+        case "seven_day_oauth_apps": return (String(localized: "Weekly connected apps", bundle: .language), 4, 10_080)
+        case "extra_usage": return (String(localized: "Extra usage", bundle: .language), 9, nil)
         default:
             let readable = key
                 .replacingOccurrences(of: "seven_day_", with: "weekly ")
@@ -573,44 +573,44 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
     var errorDescription: String? {
         switch self {
         case .noDesktopLog:
-            "Claude Desktop has not recorded usage yet. Open Claude and sign in, or switch the Claude source to the Claude Code CLI."
+            String(localized: "Claude Desktop has not recorded usage yet. Open Claude and sign in, or switch the Claude source to the Claude Code CLI.", bundle: .language)
         case .desktopLogMalformed:
-            "Claude's usage log has an unsupported format."
+            String(localized: "Claude's usage log has an unsupported format.", bundle: .language)
         case .notSignedIn:
-            "No Claude Code CLI sign-in was found in Keychain. Run `claude` and sign in, or switch the Claude source to the desktop app."
+            String(localized: "No Claude Code CLI sign-in was found in Keychain. Run `claude` and sign in, or switch the Claude source to the desktop app.", bundle: .language)
         case .profileNotSignedIn(let guidance):
             guidance
         case .keychainDenied:
-            "GaugeZ needs permission to read the Claude Code sign-in from your Keychain."
+            String(localized: "GaugeZ needs permission to read the Claude Code sign-in from your Keychain.", bundle: .language)
         case .keychainUnavailable:
-            "The Keychain is not available right now (for example just after waking). GaugeZ will retry."
+            String(localized: "The Keychain is not available right now (for example just after waking). GaugeZ will retry.", bundle: .language)
         case .malformedCredential:
-            "The Claude Code sign-in has an unsupported format."
+            String(localized: "The Claude Code sign-in has an unsupported format.", bundle: .language)
         case .tokenExpired:
-            "The Claude Code sign-in has expired. Open Claude Code once so it can refresh, then retry."
+            String(localized: "The Claude Code sign-in has expired. Open Claude Code once so it can refresh, then retry.", bundle: .language)
         case .unauthorized:
-            "Claude rejected the Claude Code sign-in. Sign in to Claude Code again."
+            String(localized: "Claude rejected the Claude Code sign-in. Sign in to Claude Code again.", bundle: .language)
         case .forbidden:
-            "This Claude account cannot read usage through Claude Code."
+            String(localized: "This Claude account cannot read usage through Claude Code.", bundle: .language)
         case .rateLimited(let until):
-            "Claude asked GaugeZ to wait until \(until.formatted(date: .omitted, time: .shortened))."
+            String(localized: "Claude asked GaugeZ to wait until \(until.formatted(date: .omitted, time: .shortened)).", bundle: .language)
         case .offline(let detail):
-            "Claude could not be reached: \(detail)"
+            String(localized: "Claude could not be reached: \(detail)", bundle: .language)
         case .server(let status):
-            "Claude returned a server error (\(status))."
+            String(localized: "Claude returned a server error (\(status)).", bundle: .language)
         case .unexpectedStatus(let status):
-            "Claude returned an unexpected response (\(status))."
+            String(localized: "Claude returned an unexpected response (\(status)).", bundle: .language)
         case .malformedResponse:
-            "Claude returned an unsupported usage response."
+            String(localized: "Claude returned an unsupported usage response.", bundle: .language)
         case .invalidUtilization(let key):
-            "Claude reported an out-of-range value for \(key)."
+            String(localized: "Claude reported an out-of-range value for \(key).", bundle: .language)
         case .noUsageWindows:
-            "Claude reported no usage windows."
+            String(localized: "Claude reported no usage windows.", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let message = errorDescription ?? "Unknown Claude error"
+        let message = errorDescription ?? String(localized: "Unknown Claude error", bundle: .language)
         switch self {
         case .noDesktopLog, .notSignedIn, .profileNotSignedIn, .unauthorized:
             return .signedOut(message)
@@ -736,9 +736,9 @@ enum ClaudeDesktopUsageReader {
     }
 
     private static let descriptors: [(String, String, Int?)] = [
-        ("fh", "5-hour limit", 300),
-        ("sd", "Weekly limit", 10_080),
-        ("xu", "Extra usage", nil)
+        ("fh", String(localized: "5-hour limit", bundle: .language), 300),
+        ("sd", String(localized: "Weekly limit", bundle: .language), 10_080),
+        ("xu", String(localized: "Extra usage", bundle: .language), nil)
     ]
 
     private static func isDesktopAppRunning() -> Bool {

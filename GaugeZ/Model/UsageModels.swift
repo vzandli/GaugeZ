@@ -121,15 +121,15 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     var sourceDescription: String {
         switch kind {
         case .claude:
-            profileSlug.map { "Reads the Claude Code sign-in and sessions in ~/.claude-\($0)." }
-                ?? "Reads the Claude desktop usage log, or the default Claude Code CLI sign-in from Keychain."
-        case .cursor: "Uses Cursor's local sign-in to ask cursor.com for plan usage."
-        case .codex: "Talks to the local app-server bundled with Codex, ChatGPT, or the codex CLI; without one, reads ChatGPT's usage endpoint with the CLI sign-in."
-        case .antigravity: "Reads the local Antigravity server, then Google quota with the saved sign-in, or derives model turns from local transcripts."
-        case .glm: "Reads Z.ai Coding Plan usage with a key held by Claude Code, ZCode, or OpenCode."
-        case .grok: "Reads Grok Build’s xAI account sign-in from ~/.grok/auth.json and asks its billing service for the allowance."
-        case .opencode: "Reads OpenCode Go plan usage with the opencode-go key OpenCode stores on sign-in."
-        case .copilot: "Reads Copilot quotas using GH_TOKEN or the GitHub CLI sign-in. Run gh auth login to connect."
+            profileSlug.map { String(localized: "Reads the Claude Code sign-in and sessions in ~/.claude-\($0).", bundle: .language) }
+                ?? String(localized: "Reads the Claude desktop usage log, or the default Claude Code CLI sign-in from Keychain.", bundle: .language)
+        case .cursor: String(localized: "Uses Cursor's local sign-in to ask cursor.com for plan usage.", bundle: .language)
+        case .codex: String(localized: "Talks to the local app-server bundled with Codex, ChatGPT, or the codex CLI; without one, reads ChatGPT's usage endpoint with the CLI sign-in.", bundle: .language)
+        case .antigravity: String(localized: "Reads the local Antigravity server, then Google quota with the saved sign-in, or derives model turns from local transcripts.", bundle: .language)
+        case .glm: String(localized: "Reads Z.ai Coding Plan usage with a key held by Claude Code, ZCode, or OpenCode.", bundle: .language)
+        case .grok: String(localized: "Reads Grok Build’s xAI account sign-in from ~/.grok/auth.json and asks its billing service for the allowance.", bundle: .language)
+        case .opencode: String(localized: "Reads OpenCode Go plan usage with the opencode-go key OpenCode stores on sign-in.", bundle: .language)
+        case .copilot: String(localized: "Reads Copilot quotas using GH_TOKEN or the GitHub CLI sign-in. Run gh auth login to connect.", bundle: .language)
         }
     }
 }
@@ -287,13 +287,13 @@ struct ProviderCostInfo: Codable, Equatable, Sendable {
         var parts: [String] = []
         if let total = totalTokens, total > 0 {
             let tokensStr = total >= 1000 ? String(format: "%.1fk", Double(total) / 1000.0) : "\(total)"
-            parts.append("\(tokensStr) tokens")
+            parts.append(String(localized: "\(tokensStr) tokens", bundle: .language))
         }
         if let calls = modelCalls, calls > 0 {
             if let duration = apiDurationSeconds, duration > 0 {
-                parts.append("\(calls) \(calls == 1 ? "call" : "calls") · \(duration)s")
+                parts.append(String(localized: "\(Int(calls)) calls · \(Int(duration))s", bundle: .language))
             } else {
-                parts.append("\(calls) \(calls == 1 ? "call" : "calls")")
+                parts.append(String(localized: "\(Int(calls)) calls", bundle: .language))
             }
         }
         if let project = projectName, !project.isEmpty {
@@ -353,7 +353,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
 
     static func placeholder(
         for provider: ProviderID,
-        health: ProviderHealth = .unavailable("Adapter not connected yet")
+        health: ProviderHealth = .unavailable(String(localized: "Adapter not connected yet", bundle: .language))
     ) -> UsageSnapshot {
         UsageSnapshot(
             provider: provider,

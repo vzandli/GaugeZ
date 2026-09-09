@@ -224,7 +224,7 @@ enum CodexWebUsage {
         }
         guard let limit = object["rate_limit"] as? [String: Any] else { throw CodexProviderError.noUsageWindows }
         var windows: [UsageWindow] = []
-        for (id, fallback) in [("primary", "Current limit"), ("secondary", "Weekly limit")] {
+        for (id, fallback) in [("primary", String(localized: "Current limit", bundle: .language)), ("secondary", String(localized: "Weekly limit", bundle: .language))] {
             guard let window = limit["\(id)_window"] as? [String: Any] else { continue }
             guard let percent = (window["used_percent"] as? NSNumber)?.doubleValue, percent.isFinite else {
                 throw CodexProviderError.malformedResponse
@@ -256,11 +256,11 @@ enum CodexWindowLabel {
     static func label(minutes: Int?, fallback: String) -> String {
         guard let minutes, minutes > 0 else { return fallback }
         switch minutes {
-        case 300: return "5-hour limit"
-        case 10_080: return "Weekly limit"
-        case let value where value % 1_440 == 0: return "\(value / 1_440)-day limit"
-        case let value where value % 60 == 0: return "\(value / 60)-hour limit"
-        default: return "\(minutes)-minute limit"
+        case 300: return String(localized: "5-hour limit", bundle: .language)
+        case 10_080: return String(localized: "Weekly limit", bundle: .language)
+        case let value where value % 1_440 == 0: return String(localized: "\(value / 1_440)-day limit", bundle: .language)
+        case let value where value % 60 == 0: return String(localized: "\(value / 60)-hour limit", bundle: .language)
+        default: return String(localized: "\(minutes)-minute limit", bundle: .language)
         }
     }
 }
@@ -400,10 +400,10 @@ private final class CodexAppServerProbe: @unchecked Sendable {
         for (bucketID, bucket) in buckets {
             planName = planName ?? bucket.planType
             if let primary = bucket.primary {
-                windows.append(try primary.normalized(id: "\(bucketID)-primary", fallbackLabel: "Current limit"))
+                windows.append(try primary.normalized(id: "\(bucketID)-primary", fallbackLabel: String(localized: "Current limit", bundle: .language)))
             }
             if let secondary = bucket.secondary {
-                windows.append(try secondary.normalized(id: "\(bucketID)-secondary", fallbackLabel: "Weekly limit"))
+                windows.append(try secondary.normalized(id: "\(bucketID)-secondary", fallbackLabel: String(localized: "Weekly limit", bundle: .language)))
             }
         }
 
@@ -531,39 +531,39 @@ enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
     var errorDescription: String? {
         switch self {
         case .notInstalled:
-            return "Codex is not installed. Install the Codex app, ChatGPT, or the codex CLI and sign in."
+            return String(localized: "Codex is not installed. Install the Codex app, ChatGPT, or the codex CLI and sign in.", bundle: .language)
         case .notSignedIn:
-            return "The Codex CLI is not signed in to ChatGPT. Run `codex login`, or install the Codex app."
+            return String(localized: "The Codex CLI is not signed in to ChatGPT. Run `codex login`, or install the Codex app.", bundle: .language)
         case .malformedCredential:
-            return "The Codex CLI sign-in has an unsupported format."
+            return String(localized: "The Codex CLI sign-in has an unsupported format.", bundle: .language)
         case .sessionExpired:
-            return "The Codex CLI sign-in has expired. Run `codex` once so it refreshes, then retry."
+            return String(localized: "The Codex CLI sign-in has expired. Run `codex` once so it refreshes, then retry.", bundle: .language)
         case .unauthorized:
-            return "ChatGPT rejected the Codex sign-in. Sign in to Codex again."
+            return String(localized: "ChatGPT rejected the Codex sign-in. Sign in to Codex again.", bundle: .language)
         case .offline(let detail):
-            return "ChatGPT could not be reached: \(detail)"
+            return String(localized: "ChatGPT could not be reached: \(detail)", bundle: .language)
         case .unexpectedStatus(let status):
-            return "ChatGPT returned an unexpected response (\(status))."
+            return String(localized: "ChatGPT returned an unexpected response (\(status)).", bundle: .language)
         case .timedOut:
-            return "Codex did not answer within 12 seconds."
+            return String(localized: "Codex did not answer within 12 seconds.", bundle: .language)
         case .noResponse:
-            return "Codex returned no response."
+            return String(localized: "Codex returned no response.", bundle: .language)
         case .malformedResponse:
-            return "Codex returned an unsupported response."
+            return String(localized: "Codex returned an unsupported response.", bundle: .language)
         case .noUsageWindows:
-            return "Codex reported no usage windows."
+            return String(localized: "Codex reported no usage windows.", bundle: .language)
         case .server(let message):
             if message.contains("404") || message.contains("wham/usage") {
-                return "ChatGPT rate limits are temporarily unavailable."
+                return String(localized: "ChatGPT rate limits are temporarily unavailable.", bundle: .language)
             } else if Self.looksUnauthorized(message) {
-                return "ChatGPT session expired. Sign in inside ChatGPT to refresh."
+                return String(localized: "ChatGPT session expired. Sign in inside ChatGPT to refresh.", bundle: .language)
             }
-            return "Codex app-server could not provide usage. Open Codex and retry."
+            return String(localized: "Codex app-server could not provide usage. Open Codex and retry.", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let text = errorDescription ?? "Codex error"
+        let text = errorDescription ?? String(localized: "Codex error", bundle: .language)
         switch self {
         case .server(let message) where Self.looksUnauthorized(message):
             return .signedOut(text)

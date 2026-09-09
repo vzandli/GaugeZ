@@ -24,6 +24,18 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.10",
+            headline: "Every message in your language.",
+            changes: [
+                .init("Provider messages are translated",
+                      "Sign-in problems, unreachable services, and rate-limit notices from every provider now appear in the language you chose."),
+                .init("So are the quota windows",
+                      "5-hour limit, weekly limits, premium requests, and the other window names read naturally in all 21 languages."),
+                .init("Settings tooltips too",
+                      "The source description for each provider and the Keychain messages follow the app language.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.9",
             headline: "GaugeZ speaks your language.",
             changes: [

@@ -2,7 +2,7 @@ import Foundation
 
 struct ProviderRetryError: LocalizedError, ProviderHealthDescribing {
     let until: Date
-    var errorDescription: String? { "Rate limited. Next retry at \(until.formatted(date: .omitted, time: .standard))." }
+    var errorDescription: String? { String(localized: "Rate limited. Next retry at \(until.formatted(date: .omitted, time: .standard)).", bundle: .language) }
     var providerHealth: ProviderHealth { .stale(errorDescription!) }
 }
 

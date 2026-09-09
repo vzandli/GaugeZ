@@ -22,9 +22,9 @@ struct ClaudeProfile: Hashable, Sendable {
     var credentialsFile: URL { directory.appendingPathComponent(".credentials.json") }
     var signInGuidance: String {
         if let slug = provider.profileSlug {
-            return "Open Claude Code with CLAUDE_CONFIG_DIR pointing to ~/.claude-\(slug), sign in, then retry."
+            return String(localized: "Open Claude Code with CLAUDE_CONFIG_DIR pointing to ~/.claude-\(slug), sign in, then retry.", bundle: .language)
         }
-        return "Open Claude Code and sign in, then retry."
+        return String(localized: "Open Claude Code and sign in, then retry.", bundle: .language)
     }
 
     /// Finder does not inherit shell aliases. Discover the conventional directories at launch,

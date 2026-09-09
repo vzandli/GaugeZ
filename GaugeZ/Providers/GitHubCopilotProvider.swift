@@ -43,10 +43,10 @@ enum CopilotProviderError: LocalizedError, ProviderHealthDescribing {
     case signedOut, malformed, nothingMetered, status(Int)
     var errorDescription: String? {
         switch self {
-        case .signedOut: "Sign in with gh auth login, or set GH_TOKEN, using an account with GitHub Copilot access."
-        case .malformed: "GitHub Copilot returned an unsupported quota response."
-        case .nothingMetered: "GitHub Copilot reports no metered quotas."
-        case .status(let code): "GitHub Copilot returned HTTP \(code)."
+        case .signedOut: String(localized: "Sign in with gh auth login, or set GH_TOKEN, using an account with GitHub Copilot access.", bundle: .language)
+        case .malformed: String(localized: "GitHub Copilot returned an unsupported quota response.", bundle: .language)
+        case .nothingMetered: String(localized: "GitHub Copilot reports no metered quotas.", bundle: .language)
+        case .status(let code): String(localized: "GitHub Copilot returned HTTP \(code).", bundle: .language)
         }
     }
     var providerHealth: ProviderHealth {
@@ -225,9 +225,9 @@ enum GitHubCopilotUsage {
 
     private static func label(for id: String) -> String {
         switch id {
-        case "premium_interactions": return "Premium requests"
-        case "chat":                return "Chat requests"
-        case "completions":         return "Completions"
+        case "premium_interactions": return String(localized: "Premium requests", bundle: .language)
+        case "chat":                return String(localized: "Chat requests", bundle: .language)
+        case "completions":         return String(localized: "Completions", bundle: .language)
         default:
             return id.replacingOccurrences(of: "_", with: " ").capitalized
         }

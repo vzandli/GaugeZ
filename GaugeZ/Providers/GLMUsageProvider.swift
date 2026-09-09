@@ -67,18 +67,21 @@ enum GLMUsageParser {
             let number = (limit["number"] as? NSNumber)?.intValue
             let descriptor: (String, String, Int?)
             if type == "TIME_LIMIT" {
-                descriptor = ("mcp", "Monthly MCP calls", nil)
+                descriptor = ("mcp", String(localized: "Monthly MCP calls", bundle: .language), nil)
             } else if unit == 3, number == 5 {
-                descriptor = ("session", "5-hour limit", 300)
+                descriptor = ("session", String(localized: "5-hour limit", bundle: .language), 300)
             } else if unit == 6, number == 1 {
-                descriptor = ("weekly", "Weekly limit", 10080)
+                descriptor = ("weekly", String(localized: "Weekly limit", bundle: .language), 10080)
             } else if let unit, let number, number > 0, number < 10000 {
-                descriptor = ("window-\(unit)x\(number)", "Usage (\(number) \(unit == 3 ? "hours" : unit == 6 ? "weeks" : "units"))", nil)
+                let unitWord = unit == 3 ? String(localized: "hours", bundle: .language)
+                    : unit == 6 ? String(localized: "weeks", bundle: .language)
+                    : String(localized: "units", bundle: .language)
+                descriptor = ("window-\(unit)x\(number)", String(localized: "Usage (\(number) \(unitWord))", bundle: .language), nil)
             } else {
                 // A window shape this build does not know is still a reading; dropping it (or
                 // failing the whole response) would blank the ring the day Z.ai adds one.
                 let base = type.isEmpty ? "limit" : type.lowercased()
-                descriptor = ("\(base)-\(index)", "Usage", nil)
+                descriptor = ("\(base)-\(index)", String(localized: "Usage", bundle: .language), nil)
             }
             var reset: Date?
             if let millis = (limit["nextResetTime"] as? NSNumber)?.doubleValue {
@@ -106,17 +109,17 @@ enum GLMProviderError: LocalizedError, ProviderHealthDescribing {
 
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: "No readable Z.ai Coding Plan key found. Configure it in Claude Code, ZCode, or OpenCode, then retry."
-        case .unauthorized: "Z.ai rejected the Coding Plan key. Update it in the tool that owns it, then retry."
-        case .malformed: "Z.ai returned an unsupported usage response."
-        case .noLimits: "Z.ai reported no supported quota windows."
-        case .rateLimited: "Z.ai asked GaugeZ to wait before checking again."
-        case .server(let code): "Z.ai returned an error (\(code))."
+        case .notSignedIn: String(localized: "No readable Z.ai Coding Plan key found. Configure it in Claude Code, ZCode, or OpenCode, then retry.", bundle: .language)
+        case .unauthorized: String(localized: "Z.ai rejected the Coding Plan key. Update it in the tool that owns it, then retry.", bundle: .language)
+        case .malformed: String(localized: "Z.ai returned an unsupported usage response.", bundle: .language)
+        case .noLimits: String(localized: "Z.ai reported no supported quota windows.", bundle: .language)
+        case .rateLimited: String(localized: "Z.ai asked GaugeZ to wait before checking again.", bundle: .language)
+        case .server(let code): String(localized: "Z.ai returned an error (\(code)).", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let message = errorDescription ?? "GLM unavailable"
+        let message = errorDescription ?? String(localized: "GLM unavailable", bundle: .language)
         switch self {
         case .notSignedIn, .unauthorized: return .signedOut(message)
         case .rateLimited, .server: return .stale(message)

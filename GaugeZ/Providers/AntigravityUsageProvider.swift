@@ -398,7 +398,7 @@ enum AntigravityQuotaParser {
     private static func cadence(bucketID: String, displayName: String) -> (label: String, minutes: Int?) {
         let text = (bucketID + " " + displayName).lowercased().replacingOccurrences(of: "_", with: "-")
         if ["5h", "5-hour", "five hour", "five-hour", "session"].contains(where: text.contains) {
-            return ("5-hour limit", 300)
+            return (String(localized: "5-hour limit", bundle: .language), 300)
         }
         if text.contains("weekly") || text.contains("week") {
             return ("weekly limit", 10_080)
@@ -431,21 +431,21 @@ enum AntigravityProviderError: LocalizedError, ProviderHealthDescribing {
         switch self {
         case .notRunning(let installed):
             installed
-                ? "Antigravity is not running. Open Antigravity to read its quota."
-                : "Antigravity is not installed."
-        case .noListeningPorts: "Antigravity is starting up and not accepting requests yet."
-        case .noReachableServer: "Antigravity's local server did not answer."
-        case .transport(let detail): "Antigravity's local server could not be reached: \(detail)"
-        case .rejected(let status): "Antigravity's local server rejected the request (\(status)). Restart Antigravity."
-        case .unexpectedStatus(let status): "Antigravity's local server returned an unexpected response (\(status))."
-        case .malformedResponse: "Antigravity returned an unsupported quota response."
-        case .invalidValue(let bucket): "Antigravity reported an out-of-range value for \(bucket)."
-        case .noQuotaBuckets: "Antigravity reported no quota buckets."
+                ? String(localized: "Antigravity is not running. Open Antigravity to read its quota.", bundle: .language)
+                : String(localized: "Antigravity is not installed.", bundle: .language)
+        case .noListeningPorts: String(localized: "Antigravity is starting up and not accepting requests yet.", bundle: .language)
+        case .noReachableServer: String(localized: "Antigravity's local server did not answer.", bundle: .language)
+        case .transport(let detail): String(localized: "Antigravity's local server could not be reached: \(detail)", bundle: .language)
+        case .rejected(let status): String(localized: "Antigravity's local server rejected the request (\(status)). Restart Antigravity.", bundle: .language)
+        case .unexpectedStatus(let status): String(localized: "Antigravity's local server returned an unexpected response (\(status)).", bundle: .language)
+        case .malformedResponse: String(localized: "Antigravity returned an unsupported quota response.", bundle: .language)
+        case .invalidValue(let bucket): String(localized: "Antigravity reported an out-of-range value for \(bucket).", bundle: .language)
+        case .noQuotaBuckets: String(localized: "Antigravity reported no quota buckets.", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let message = errorDescription ?? "Unknown Antigravity error"
+        let message = errorDescription ?? String(localized: "Unknown Antigravity error", bundle: .language)
         switch self {
         case .notRunning(let installed): return installed ? .stale(message) : .unavailable(message)
         case .noListeningPorts, .noReachableServer, .transport: return .stale(message)

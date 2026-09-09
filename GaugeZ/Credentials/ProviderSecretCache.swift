@@ -45,9 +45,9 @@ enum SecretError: LocalizedError, ProviderHealthDescribing {
     case missing(String), denied(String), unavailable(String)
     var errorDescription: String? {
         switch self {
-        case .missing(let name): "No saved \(name) sign-in. Sign in with its app or CLI, then refresh."
-        case .denied(let name): "Keychain access for \(name) was declined. Use Retry to request access again."
-        case .unavailable(let name): "The Keychain is temporarily unavailable for \(name)."
+        case .missing(let name): String(localized: "No saved \(name) sign-in. Sign in with its app or CLI, then refresh.", bundle: .language)
+        case .denied(let name): String(localized: "Keychain access for \(name) was declined. Use Retry to request access again.", bundle: .language)
+        case .unavailable(let name): String(localized: "The Keychain is temporarily unavailable for \(name).", bundle: .language)
         }
     }
     var providerHealth: ProviderHealth {

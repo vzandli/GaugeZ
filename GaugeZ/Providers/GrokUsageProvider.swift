@@ -231,9 +231,9 @@ enum GrokUsageParser {
         let label: String
         let duration: Int?
         switch type {
-        case "USAGE_PERIOD_TYPE_WEEKLY": label = shared ? "Shared weekly allowance" : "Weekly allowance"; duration = 10080
-        case "USAGE_PERIOD_TYPE_MONTHLY": label = shared ? "Shared monthly allowance" : "Monthly allowance"; duration = nil
-        default: label = shared ? "Shared allowance" : "Included allowance"; duration = nil
+        case "USAGE_PERIOD_TYPE_WEEKLY": label = shared ? String(localized: "Shared weekly allowance", bundle: .language) : String(localized: "Weekly allowance", bundle: .language); duration = 10080
+        case "USAGE_PERIOD_TYPE_MONTHLY": label = shared ? String(localized: "Shared monthly allowance", bundle: .language) : String(localized: "Monthly allowance", bundle: .language); duration = nil
+        default: label = shared ? String(localized: "Shared allowance", bundle: .language) : String(localized: "Included allowance", bundle: .language); duration = nil
         }
         let reset = try optionalDate(period?["end"] ?? config["billingPeriodEnd"])
         let limit = try cents(config["monthlyLimit"])
@@ -243,7 +243,7 @@ enum GrokUsageParser {
             guard let percentage = number(value), percentage >= 0 else { throw GrokProviderError.malformedResponse }
             windows.append(window(id: "included", label: label, percentage: percentage, reset: reset, duration: duration))
         } else if let limit, limit > 0, let used {
-            windows.append(window(id: "included", label: "Monthly allowance", percentage: used / limit * 100,
+            windows.append(window(id: "included", label: String(localized: "Monthly allowance", bundle: .language), percentage: used / limit * 100,
                                   reset: reset, duration: nil))
         } else if period != nil && (type != nil || reset != nil) {
             // When usage is zero in the current period, xAI's billing endpoint omits creditUsagePercent entirely.
@@ -256,7 +256,7 @@ enum GrokUsageParser {
            let cap = try cents(config["onDemandCap"]), cap > 0 {
             let spent = try cents(config["onDemandUsed"]) ?? used.flatMap { used in limit.map { max(0, used - $0) } }
             if let spent {
-                windows.append(window(id: "on-demand", label: "On-demand spend", percentage: spent / cap * 100,
+                windows.append(window(id: "on-demand", label: String(localized: "On-demand spend", bundle: .language), percentage: spent / cap * 100,
                                       reset: try optionalDate(config["billingPeriodEnd"]), duration: nil))
             }
         }
@@ -305,23 +305,23 @@ enum GrokProviderError: LocalizedError, ProviderHealthDescribing {
 
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: "No Grok Build login found. Install Grok Build, run `grok login`, then refresh."
-        case .credentialUnreadable: "GaugeZ cannot read Grok Build’s auth.json. Check its file permissions, then retry."
-        case .malformedCredential: "Grok Build’s sign-in file has an unsupported format. Run `grok login` again."
-        case .unsupportedAuth: "Grok usage requires the default xAI account login. Run `grok login`; API keys, legacy web logins, and custom identity providers are not supported."
-        case .expired: "Grok Build’s login has expired. Open Grok Build so it refreshes the login, then retry."
-        case .unauthorized: "Grok rejected the login. Run `grok login` again, then refresh."
-        case .forbidden: "This Grok account cannot access the subscription usage endpoint. Check your account in Grok Build."
-        case .offline: "Grok’s billing service could not be reached. GaugeZ will retry automatically."
-        case .malformedResponse: "Grok returned an unsupported billing response."
-        case .noQuota: "Grok reported no measurable usage allowance for this account."
-        case .server(let code): "Grok’s billing service returned an error (\(code))."
-        case .unexpectedStatus(let code): "Grok’s billing service returned an unexpected status (\(code))."
+        case .notSignedIn: String(localized: "No Grok Build login found. Install Grok Build, run `grok login`, then refresh.", bundle: .language)
+        case .credentialUnreadable: String(localized: "GaugeZ cannot read Grok Build’s auth.json. Check its file permissions, then retry.", bundle: .language)
+        case .malformedCredential: String(localized: "Grok Build’s sign-in file has an unsupported format. Run `grok login` again.", bundle: .language)
+        case .unsupportedAuth: String(localized: "Grok usage requires the default xAI account login. Run `grok login`; API keys, legacy web logins, and custom identity providers are not supported.", bundle: .language)
+        case .expired: String(localized: "Grok Build’s login has expired. Open Grok Build so it refreshes the login, then retry.", bundle: .language)
+        case .unauthorized: String(localized: "Grok rejected the login. Run `grok login` again, then refresh.", bundle: .language)
+        case .forbidden: String(localized: "This Grok account cannot access the subscription usage endpoint. Check your account in Grok Build.", bundle: .language)
+        case .offline: String(localized: "Grok’s billing service could not be reached. GaugeZ will retry automatically.", bundle: .language)
+        case .malformedResponse: String(localized: "Grok returned an unsupported billing response.", bundle: .language)
+        case .noQuota: String(localized: "Grok reported no measurable usage allowance for this account.", bundle: .language)
+        case .server(let code): String(localized: "Grok’s billing service returned an error (\(code)).", bundle: .language)
+        case .unexpectedStatus(let code): String(localized: "Grok’s billing service returned an unexpected status (\(code)).", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let message = errorDescription ?? "Grok Build unavailable"
+        let message = errorDescription ?? String(localized: "Grok Build unavailable", bundle: .language)
         switch self {
         case .notSignedIn, .unauthorized: return .signedOut(message)
         case .credentialUnreadable: return .permissionRequired(message)

@@ -376,7 +376,7 @@ enum CursorActivityParser {
         // chat began; a row that is merely waiting must not borrow it.
         let since = (working && !blocked ? run : nil) ?? touched ?? date(row["createdAt"])
         return ActivitySession(id: "cursor-\(id)", provider: .cursor,
-                               name: String((row["name"] as? String ?? "Untitled chat").prefix(100)),
+                               name: String((row["name"] as? String ?? String(localized: "Untitled chat", bundle: .language)).prefix(100)),
                                project: String((row["subtitle"] as? String ?? "Cursor").prefix(160)),
                                state: blocked ? .waiting : working ? .working : .idle,
                                waitingReason: blocked ? "Needs your input" : nil,

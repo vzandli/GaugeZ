@@ -160,9 +160,9 @@ final class UsageStore: ObservableObject {
             if enabled { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
             loginProblem = SMAppService.mainApp.status == .requiresApproval
-                ? "Allow GaugeZ in System Settings → General → Login Items." : nil
+                ? String(localized: "Allow GaugeZ in System Settings → General → Login Items.", bundle: .language) : nil
         } catch {
-            loginProblem = "macOS could not update the login item. Move GaugeZ to Applications and try again."
+            loginProblem = String(localized: "macOS could not update the login item. Move GaugeZ to Applications and try again.", bundle: .language)
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
@@ -421,9 +421,9 @@ final class UsageStore: ObservableObject {
             snapshots = Dictionary(uniqueKeysWithValues: available.enumerated().map { index, provider in
                 (provider, UsageSnapshot(provider: provider, accountID: nil, planName: "Preview plan",
                     windows: [
-                        UsageWindow(id: "session", label: "5-hour limit", usedPercent: provider == .copilot ? 99.7 : index == 2 ? 100 : Double((20 + index * 15) % 100),
+                        UsageWindow(id: "session", label: String(localized: "5-hour limit", bundle: .language), usedPercent: provider == .copilot ? 99.7 : index == 2 ? 100 : Double((20 + index * 15) % 100),
                                     resetsAt: Date().addingTimeInterval(3600), durationMinutes: 300),
-                        UsageWindow(id: "weekly", label: "Weekly limit", usedPercent: 35,
+                        UsageWindow(id: "weekly", label: String(localized: "Weekly limit", bundle: .language), usedPercent: 35,
                                     resetsAt: Date().addingTimeInterval(172800), durationMinutes: 10080)
                     ], observedAt: .now, source: "Preview data", health: .live))
             })
@@ -588,7 +588,7 @@ final class UsageStore: ObservableObject {
         NSWorkspace.shared.openApplication(at: url, configuration: .init()) { [weak self] _, error in
             guard error != nil else { return }
             Task { @MainActor [weak self] in
-                self?.actionErrors[provider] = "The provider app could not be opened. Install it in Applications and try again."
+                self?.actionErrors[provider] = String(localized: "The provider app could not be opened. Install it in Applications and try again.", bundle: .language)
             }
         }
     }
@@ -610,7 +610,7 @@ final class UsageStore: ObservableObject {
             Self.note("\(provider.displayName) refreshed: \(snapshot.health.shortLabel), \(snapshot.windows.count) windows via \(snapshot.source)")
             lastRefreshSucceeded[provider] = .now
             if snapshot.derivedRequestCount != nil, !previous.windows.isEmpty {
-                snapshots[provider] = previous.withHealth(.stale("Quota unavailable. Derived locally: \(snapshot.derivedRequestCount!) model turns today."))
+                snapshots[provider] = previous.withHealth(.stale(String(localized: "Quota unavailable. Derived locally: \(snapshot.derivedRequestCount!) model turns today.", bundle: .language)))
             } else {
                 snapshots[provider] = snapshot
             }
@@ -691,8 +691,8 @@ final class UsageStore: ObservableObject {
             let lastFetched = max(previous.observedAt, lastRefreshSucceeded[provider] ?? .distantPast)
             if previous.health == .live, clock.timeIntervalSince(lastFetched) > 360 || crossedReset {
                 snapshots[provider] = previous.withHealth(.stale(crossedReset
-                    ? "A reset time has passed. Awaiting a fresh reading."
-                    : "This reading is over six minutes old."))
+                    ? String(localized: "A reset time has passed. Awaiting a fresh reading.", bundle: .language)
+                    : String(localized: "This reading is over six minutes old.", bundle: .language)))
             }
             let active = railIsExpanded || activity(for: provider).contains { $0.state == .working || $0.state == .waiting }
             let interval: TimeInterval = active ? 60 : 300
@@ -788,7 +788,7 @@ enum SnapshotCache {
         }
     }
 
-    static let staleMessage = "Showing the last known values. Refresh to update."
+    static var staleMessage: String { String(localized: "Showing the last known values. Refresh to update.", bundle: .language) }
 
     private static var fileURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

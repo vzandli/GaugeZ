@@ -435,8 +435,8 @@ private struct ProviderSettingsRow: View {
     /// Stacked up/down chevrons that shift the provider's place in the rail.
     private var reorderControls: some View {
         VStack(spacing: 2) {
-            reorderButton(systemImage: "chevron.up", enabled: canMoveUp, label: "Move \(provider.displayName) up in the rail") { move(-1) }
-            reorderButton(systemImage: "chevron.down", enabled: canMoveDown, label: "Move \(provider.displayName) down in the rail") { move(1) }
+            reorderButton(systemImage: "chevron.up", enabled: canMoveUp, label: String(localized: "Move \(provider.displayName) up in the rail", bundle: .language)) { move(-1) }
+            reorderButton(systemImage: "chevron.down", enabled: canMoveDown, label: String(localized: "Move \(provider.displayName) down in the rail", bundle: .language)) { move(1) }
         }
         .padding(.trailing, 2)
     }

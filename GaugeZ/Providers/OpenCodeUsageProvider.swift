@@ -109,9 +109,9 @@ enum OpenCodeUsageParser {
     static let endpoint = URL(string: "https://opencode.ai/zen/go/v1/usage")!
 
     private static let descriptors: [(id: String, label: String, minutes: Int)] = [
-        ("rolling", "5-hour limit", 300),
-        ("weekly", "Weekly limit", 10_080),
-        ("monthly", "Monthly limit", 43_200)
+        ("rolling", String(localized: "5-hour limit", bundle: .language), 300),
+        ("weekly", String(localized: "Weekly limit", bundle: .language), 10_080),
+        ("monthly", String(localized: "Monthly limit", bundle: .language), 43_200)
     ]
 
     static func windows(from data: Data) throws -> [UsageWindow] {
@@ -158,19 +158,19 @@ enum OpenCodeProviderError: LocalizedError, ProviderHealthDescribing {
 
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: "No OpenCode Go key found. Connect Go inside OpenCode (`opencode auth login`), then retry."
-        case .unauthorized: "OpenCode rejected the Go key, or this key has no Go plan. Sign in to OpenCode again."
-        case .noPlan: "This OpenCode key has no Go subscription to meter."
-        case .offline(let detail): "OpenCode could not be reached: \(detail)"
-        case .server(let status): "OpenCode returned a server error (\(status))."
-        case .unexpectedStatus(let status): "OpenCode returned an unexpected response (\(status))."
-        case .malformed: "OpenCode returned an unsupported usage response."
-        case .noLimits: "OpenCode reported no usage windows."
+        case .notSignedIn: String(localized: "No OpenCode Go key found. Connect Go inside OpenCode (`opencode auth login`), then retry.", bundle: .language)
+        case .unauthorized: String(localized: "OpenCode rejected the Go key, or this key has no Go plan. Sign in to OpenCode again.", bundle: .language)
+        case .noPlan: String(localized: "This OpenCode key has no Go subscription to meter.", bundle: .language)
+        case .offline(let detail): String(localized: "OpenCode could not be reached: \(detail)", bundle: .language)
+        case .server(let status): String(localized: "OpenCode returned a server error (\(status)).", bundle: .language)
+        case .unexpectedStatus(let status): String(localized: "OpenCode returned an unexpected response (\(status)).", bundle: .language)
+        case .malformed: String(localized: "OpenCode returned an unsupported usage response.", bundle: .language)
+        case .noLimits: String(localized: "OpenCode reported no usage windows.", bundle: .language)
         }
     }
 
     var providerHealth: ProviderHealth {
-        let message = errorDescription ?? "OpenCode unavailable"
+        let message = errorDescription ?? String(localized: "OpenCode unavailable", bundle: .language)
         switch self {
         case .notSignedIn, .unauthorized: return .signedOut(message)
         case .offline, .server: return .stale(message)
