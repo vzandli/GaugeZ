@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 /// The OAuth token Antigravity holds for a Google account.
 ///
@@ -10,6 +11,10 @@ struct AntigravityCredentials {
     /// `consumer` for a personal Google account; enterprise installs differ.
     let authMethod: String
 
+    var projectId: String? = nil
+    var email: String? = nil
+    var isCLI: Bool = false
+
     var isExpired: Bool { expiresAt <= Date() }
 
     static let service = "gemini"
@@ -17,10 +22,53 @@ struct AntigravityCredentials {
 
     private static let cache = ProviderSecretCache()
     static func forgetCached() { cache.forget() }
-    static func load() throws -> AntigravityCredentials {
-        let data = try cache.read(service: service, account: account, provider: "Antigravity")
-        guard let credential = decode(data) else { throw SecretError.missing("Antigravity") }
-        return credential
+    static func load(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                     keychain: () throws -> Data = { try cache.read(service: service, account: account, provider: "Antigravity") }) throws -> AntigravityCredentials {
+        var held: AntigravityCredentials?
+        var failure: Error = SecretError.missing("Antigravity")
+        do {
+            held = decode(try keychain())
+            if let held, !held.isExpired { return held }
+        } catch { failure = error }
+        // Re-read local files each poll so CLI token rotation and WAL updates are visible.
+        let candidates = [readOMP(home.appendingPathComponent(".omp/agent/agent.db")),
+                          readJSON(home.appendingPathComponent(".gemini/oauth_creds.json"))].compactMap { $0 }
+        if let current = candidates.first(where: { !$0.isExpired }) { return current }
+        if let expired = held ?? candidates.first { return expired }
+        throw failure
+    }
+
+    private static func readJSON(_ url: URL) -> AntigravityCredentials? {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size < 1_048_576, let data = try? Data(contentsOf: url) else { return nil }
+        return decodeCLI(data, omp: false)
+    }
+
+    private static func readOMP(_ url: URL) -> AntigravityCredentials? {
+        guard let db = ReadOnlySQLite.open(path: url.path) else { return nil }
+        defer { sqlite3_close(db) }
+        let rows = ReadOnlySQLite.rows(in: db,
+            sql: "SELECT data FROM auth_credentials WHERE provider = 'google-antigravity' ORDER BY updated_at DESC LIMIT 1", columns: 1)
+        guard let text = rows.first?.first, text.utf8.count < 1_048_576 else { return nil }
+        return decodeCLI(Data(text.utf8), omp: true)
+    }
+
+    static func decodeCLI(_ data: Data, omp: Bool) -> AntigravityCredentials? {
+        struct Payload: Decodable {
+            let access: String?
+            let access_token: String?
+            let expires: Double?
+            let expiry_date: Double?
+            let projectId: String?
+            let email: String?
+        }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              let token = omp ? payload.access : payload.access_token,
+              !token.isEmpty, !token.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0) }),
+              let millis = omp ? payload.expires : payload.expiry_date,
+              millis.isFinite, millis > 0, millis < 253_402_300_800_000 else { return nil }
+        return AntigravityCredentials(accessToken: token, expiresAt: Date(timeIntervalSince1970: millis / 1000),
+                                      authMethod: "consumer", projectId: payload.projectId, email: payload.email, isCLI: true)
     }
 
     /// Split out so the decoding can be tested against a real stored value

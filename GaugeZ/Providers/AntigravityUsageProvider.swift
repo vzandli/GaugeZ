@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Reads Antigravity model quotas from the language server that a running Antigravity app or
 /// Antigravity IDE hosts on 127.0.0.1.
@@ -67,9 +68,10 @@ actor AntigravityUsageProvider: UsageProviding {
         let credentials = try loadCredentials()
         guard !credentials.isExpired else { throw SecretError.missing("Antigravity (sign-in expired)") }
         if credentials.accessToken == refusedToken { throw AntigravityProviderError.unexpectedStatus(403) }
-        var request = URLRequest(url: URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")!)
+        let host = credentials.isCLI ? "daily-cloudcode-pa.googleapis.com" : "cloudcode-pa.googleapis.com"
+        var request = URLRequest(url: URL(string: "https://\(host)/v1internal:retrieveUserQuotaSummary")!)
         request.httpMethod = "POST"
-        request.httpBody = Data("{}".utf8)
+        request.httpBody = try JSONSerialization.data(withJSONObject: credentials.projectId.map { ["project": $0] } ?? [:])
         request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
@@ -81,7 +83,7 @@ actor AntigravityUsageProvider: UsageProviding {
         refusedToken = nil
         let windows = try AntigravityQuotaParser.remoteWindows(from: data)
         retryPolicy.succeeded()
-        return UsageSnapshot(provider: .antigravity, accountID: nil, planName: credentials.authMethod,
+        return UsageSnapshot(provider: .antigravity, accountID: credentials.email, planName: credentials.authMethod,
                              windows: windows, observedAt: .now, source: "Google Cloud Code quota", health: .live)
     }
 
@@ -338,12 +340,27 @@ enum AntigravityQuotaParser {
         let buckets = (root["buckets"] as? [[String: Any]] ?? []) + groups.flatMap { $0["buckets"] as? [[String: Any]] ?? [] }
         var seen: Set<String> = []
         let windows = buckets.compactMap { bucket -> UsageWindow? in
-            guard let limit = (bucket["limit"] as? NSNumber)?.doubleValue, limit.isFinite, limit > 0,
-                  let used = (bucket["used"] as? NSNumber)?.doubleValue, used.isFinite, used >= 0, used <= limit * 1.5,
-                  let name = bucket["name"] as? String ?? bucket["displayName"] as? String, !name.isEmpty,
-                  seen.insert(name).inserted else { return nil }
-            return UsageWindow(id: "antigravity-" + name, label: bucket["displayName"] as? String ?? name,
-                               usedPercent: min(100, used / limit * 100),
+            guard bucket["disabled"] as? Bool != true,
+                  let name = bucket["name"] as? String ?? bucket["bucketId"] as? String ?? bucket["modelId"] as? String ?? bucket["displayName"] as? String,
+                  !name.isEmpty, !name.lowercased().hasPrefix("chat_") else { return nil }
+            let usedPercent: Double
+            if let fraction = bucket["remainingFraction"] as? NSNumber,
+               CFGetTypeID(fraction) != CFBooleanGetTypeID() {
+                let value = fraction.doubleValue
+                guard value.isFinite, (0...1).contains(value) else { return nil }
+                usedPercent = (1 - value) * 100
+            } else {
+                guard let limit = bucket["limit"] as? NSNumber, CFGetTypeID(limit) != CFBooleanGetTypeID(),
+                      let used = bucket["used"] as? NSNumber, CFGetTypeID(used) != CFBooleanGetTypeID(),
+                      limit.doubleValue.isFinite, limit.doubleValue > 0, used.doubleValue.isFinite,
+                      used.doubleValue >= 0, used.doubleValue <= limit.doubleValue * 1.5 else { return nil }
+                usedPercent = min(100, used.doubleValue / limit.doubleValue * 100)
+            }
+            let model = bucket["modelId"] as? String ?? ""
+            let id = model.isEmpty || model == name ? name : model + "-" + name
+            guard seen.insert(id).inserted else { return nil }
+            return UsageWindow(id: "antigravity-" + id, label: bucket["displayName"] as? String ?? id,
+                               usedPercent: usedPercent,
                                resetsAt: (bucket["resetTime"] as? String).flatMap(parseDate), durationMinutes: nil)
         }
         guard !windows.isEmpty else { throw AntigravityProviderError.noQuotaBuckets }

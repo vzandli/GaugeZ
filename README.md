@@ -65,7 +65,11 @@ their apps already hold.
 
 - Tokens are never written to disk or logged. Keychain items are cached in memory and
   re-read only when they change or you retry.
-- Session activity reads local metadata only, never conversation contents.
+- Session activity reads local metadata. When Claude supplies no status, GaugeZ reads up to
+  64 KB from the end of its local transcript to infer activity. Transcript text is never stored
+  by GaugeZ or sent over the network.
+- Near expiry, GaugeZ can launch standalone Claude Code with empty input to renew its sign-in;
+  no prompt is supplied. Renewal is attempted once per expiry, with a ten-minute cooldown.
 - No analytics, telemetry, or accounts. The only outbound call GaugeZ makes on its own is
   the update check against this repository's releases.
 
@@ -143,6 +147,6 @@ guessed number when the upstream format changes.
 
 ## Thanks
 
-The GitHub Copilot and GLM rings and the Grok and Copilot logos are adapted from Codenotch
+Claude transcript activity handling, the GitHub Copilot and GLM rings, and the Grok and Copilot logos are adapted from Codenotch
 (MIT); see [Third-party notices](GaugeZ/Resources/ThirdPartyNotices.txt).
 Edge rail design inspiration: [@hivinz_](https://x.com/hivinz_).

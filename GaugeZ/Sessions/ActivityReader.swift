@@ -37,8 +37,10 @@ struct ActivitySession: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Opt-in, local metadata only. Session contents and credentials are never read.
+/// Opt-in local activity. Claude transcript tails are read only when registry status is absent.
 actor ActivityReader {
+    private var transcripts: [ProviderID: ClaudeTranscriptReader] = [:]
+
     /// ctime-style `procStart` values are written in UTC.
     private static let procStartFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -50,6 +52,9 @@ actor ActivityReader {
 
     func readClaudeSessions(profile: ClaudeProfile = ClaudeProfile()) -> [ActivitySession] {
         let directory = profile.sessionsDirectory
+        if transcripts[profile.provider] == nil {
+            transcripts[profile.provider] = ClaudeTranscriptReader(projects: profile.directory.appendingPathComponent("projects"))
+        }
         guard let urls = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return [] }
         return urls.filter { $0.pathExtension == "json" }.prefix(256).compactMap { url in
             guard !Task.isCancelled,
@@ -58,6 +63,7 @@ actor ActivityReader {
                   let data = try? Data(contentsOf: url),
                   let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let pid = (record["pid"] as? NSNumber)?.int32Value, pid > 0,
+                  !ClaudeRenewalProcess.contains(pid),
                   let cwd = record["cwd"] as? String,
                   let processStart = Self.processStart(pid) else { return nil }
             let registered: Date?
@@ -70,19 +76,26 @@ actor ActivityReader {
             guard let registered, abs(registered.timeIntervalSince(processStart)) < 300 else { return nil }
             let status = record["status"] as? String ?? ""
             let tempo = record["tempo"] as? String ?? ""
-            let state: ActivitySession.State
+            var state: ActivitySession.State
             if tempo == "blocked" || status == "waiting" { state = .waiting }
             else if tempo == "active" || status == "busy" { state = .working }
             else if tempo == "idle" || status == "idle" { state = .idle }
             else { state = .unknown }
             let project = URL(fileURLWithPath: cwd).lastPathComponent
             let statusMillis = (record["statusUpdatedAt"] as? NSNumber)?.doubleValue ?? (record["updatedAt"] as? NSNumber)?.doubleValue
-            let since = statusMillis.flatMap { $0.isFinite && $0 > 0 ? Date(timeIntervalSince1970: $0 / 1000) : nil }
+            var since = statusMillis.flatMap { $0.isFinite && $0 > 0 ? Date(timeIntervalSince1970: $0 / 1000) : nil }
+            var inferred = false
+            if state == .unknown, let sessionID = record["sessionId"] as? String,
+               let activity = transcripts[profile.provider]?.activity(sessionID: sessionID, cwd: cwd) {
+                state = activity.turn == .inFlight ? .working : .idle
+                since = activity.since
+                inferred = true
+            }
             return ActivitySession(id: "\(profile.provider.rawValue)-\(pid)", provider: profile.provider,
                                    name: String((record["name"] as? String ?? project).prefix(100)),
                                    project: project, state: state,
                                    waitingReason: (record["waitingFor"] as? String ?? record["needs"] as? String).map { String($0.prefix(160)) },
-                                   since: since, pid: pid, processStartedAt: processStart)
+                                   since: since ?? registered, isInferred: inferred, pid: pid, processStartedAt: processStart)
         }.sorted {
             let rank: [ActivitySession.State: Int] = [.waiting: 0, .working: 1, .unknown: 2, .idle: 3]
             if rank[$0.state] != rank[$1.state] { return rank[$0.state, default: 3] < rank[$1.state, default: 3] }
@@ -95,14 +108,16 @@ actor ActivityReader {
         guard launchedAt != nil, let db = ReadOnlySQLite.open(path: store.path) else { return [] }
         defer { sqlite3_close(db) }
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT value FROM composerHeaders WHERE isArchived = 0 ORDER BY recency DESC LIMIT 256",
+        let hasSubagent = ReadOnlySQLite.rows(in: db, sql: "PRAGMA table_info(composerHeaders)", columns: 2).contains { $0[1] == "isSubagent" }
+        let columns = hasSubagent ? "value, isSubagent" : "value, 0"
+        guard sqlite3_prepare_v2(db, "SELECT \(columns) FROM composerHeaders WHERE isArchived = 0 ORDER BY recency DESC LIMIT 256",
                                 -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
         var sessions: [ActivitySession] = []
         while !Task.isCancelled, sqlite3_step(statement) == SQLITE_ROW {
             guard sqlite3_column_bytes(statement, 0) < 65_536,
                   let text = sqlite3_column_text(statement, 0),
-                  let session = CursorActivityParser.session(from: Data(String(cString: text).utf8), launchedAt: launchedAt, includeIdle: includeIdle)
+                  let session = CursorActivityParser.session(from: Data(String(cString: text).utf8), launchedAt: launchedAt, includeIdle: includeIdle, isSubagent: sqlite3_column_text(statement, 1).map { CursorActivityParser.flag(String(cString: $0)) } ?? false)
             else { continue }
             sessions.append(session)
         }
@@ -332,13 +347,17 @@ enum ReadOnlySQLite {
 /// together with the editor's lifetime, are the evidence that an unfinished run is still working.
 enum CursorActivityParser {
     static func session(from data: Data, launchedAt: Date?, now: Date = .now,
-                        staleAfter: TimeInterval = 15 * 60, includeIdle: Bool = false) -> ActivitySession? {
+                        staleAfter: TimeInterval = 15 * 60, includeIdle: Bool = false, isSubagent: Bool = false) -> ActivitySession? {
         guard let launchedAt,
               let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = row["composerId"] as? String, !id.isEmpty else { return nil }
-        let blocked = row["hasBlockingPendingActions"] as? Bool == true || row["hasPendingPlan"] as? Bool == true
+        guard !isSubagent, !flag(row["isSubagent"]) else { return nil }
+        let pending = flag(row["hasBlockingPendingActions"]) || flag(row["hasPendingPlan"])
         let run = date(row["unfinishedRunAt"])
-        let touched = date(row["conversationCheckpointLastUpdatedAt"]) ?? date(row["lastUpdatedAt"]) ?? run
+        let touched = date(row["conversationCheckpointLastUpdatedAt"]) ?? date(row["lastUpdatedAt"]) ?? run ?? date(row["createdAt"])
+        let blocked = pending && (touched.map {
+            $0 <= now.addingTimeInterval(5) && ($0 >= launchedAt || now.timeIntervalSince($0) <= staleAfter)
+        } ?? true)
         let working = run != nil && touched.map {
             $0 >= launchedAt && $0 <= now.addingTimeInterval(5) && now.timeIntervalSince($0) <= staleAfter
         } == true
@@ -353,6 +372,11 @@ enum CursorActivityParser {
                                state: blocked ? .waiting : working ? .working : .idle,
                                waitingReason: blocked ? "Needs your input" : nil,
                                since: since)
+    }
+
+    static func flag(_ value: Any?) -> Bool {
+        if let text = value as? String { return ["1", "true", "yes"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+        return (value as? NSNumber)?.boolValue ?? false
     }
 
     private static func date(_ raw: Any?) -> Date? {

@@ -19,14 +19,18 @@ actor ClaudeUsageProvider: UsageProviding {
     private let selectedSource: @Sendable () -> ClaudeSource
     private let retryPolicy: ProviderRetryPolicy
     private let profile: ClaudeProfile
+    private let renewSignIn: @Sendable (ClaudeProfile) async throws -> Void
     private let loadCredentials: (@Sendable () throws -> ClaudeCredential)?
+    private let renewal = ClaudeTokenRenewal()
     nonisolated private let credentialCache = ClaudeCredentialCache()
 
     init(profile: ClaudeProfile = ClaudeProfile(), session: URLSession? = nil,
          retryPolicy: ProviderRetryPolicy? = nil,
          loadCredentials: (@Sendable () throws -> ClaudeCredential)? = nil,
+         renewSignIn: @escaping @Sendable (ClaudeProfile) async throws -> Void = { try await ClaudeRenewalProcess.run($0) },
          selectedSource: @escaping @Sendable () -> ClaudeSource) {
         self.profile = profile
+        self.renewSignIn = renewSignIn
         self.loadCredentials = loadCredentials
         self.retryPolicy = retryPolicy ?? ProviderRetryPolicy(provider: profile.provider)
         self.selectedSource = selectedSource
@@ -60,8 +64,15 @@ actor ClaudeUsageProvider: UsageProviding {
     nonisolated func forgetCredentials() { credentialCache.forget() }
 
     private func fetchViaClaudeCode() async throws -> UsageSnapshot {
-        if let loadCredentials { return try await fetchViaCredential(loadCredentials()) }
-        let credential = try loadClaudeCodeCredential()
+        var credential = try loadClaudeCodeCredential()
+        if await renewal.renew(expiry: credential.expiresAt, profile: profile, launch: renewSignIn) {
+            credentialCache.forget()
+            let fresh = try loadClaudeCodeCredential()
+            if let expiry = fresh.expiresAt, expiry > (credential.expiresAt ?? .distantPast) {
+                credential = fresh
+            }
+        }
+        try Task.checkCancellation()
         do {
             return try await fetchViaCredential(credential)
         } catch ClaudeProviderError.unauthorized {
@@ -76,6 +87,7 @@ actor ClaudeUsageProvider: UsageProviding {
     }
 
     private func loadClaudeCodeCredential() throws -> ClaudeCredential {
+        if let loadCredentials { return try loadCredentials() }
         let match = try ClaudeKeychain.newest(service: profile.keychainService)
         return try credentialCache.value(stamp: match) {
             try ClaudeCredentialReader.load(profile: profile, match: match)

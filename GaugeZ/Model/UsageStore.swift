@@ -172,7 +172,9 @@ final class UsageStore: ObservableObject {
         for task in refreshTasks.values { task.cancel() }
         for task in delayedRefreshes.values { task.cancel() }
         for adapter in providers.values { adapter.forgetCredentials() }
-        for task in refreshTasks.values { await task.value }
+        refreshGenerations.removeAll()
+        refreshTasks.removeAll()
+        refreshing.removeAll()
         try SnapshotCache.erase()
         URLCache.shared.removeAllCachedResponses()
         let fm = FileManager.default
@@ -522,7 +524,7 @@ final class UsageStore: ObservableObject {
                     self.refreshing.remove(provider)
                 }
             }
-            await self.refresh(provider, using: adapter)
+            await self.refresh(provider, using: adapter, generation: generation)
         }
     }
 
@@ -568,15 +570,20 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    private func refresh(_ provider: ProviderID, using adapter: any UsageProviding) async {
+    private func refresh(_ provider: ProviderID, using adapter: any UsageProviding, generation: UUID) async {
+        guard !Task.isCancelled, !isErasing, enabledProviders.contains(provider),
+              refreshGenerations[provider] == generation else { return }
         let previous = snapshot(for: provider)
         snapshots[provider] = previous.windows.isEmpty
             ? .placeholder(for: provider, health: .loading)
             : previous
 
         do {
-            let snapshot = try await adapter.fetchSnapshot()
-            guard !Task.isCancelled else { return }
+            let snapshot = try await RefreshDeadline.run(timeout: .seconds(60)) {
+                try await adapter.fetchSnapshot()
+            }
+            guard !Task.isCancelled, !isErasing, enabledProviders.contains(provider),
+                  refreshGenerations[provider] == generation else { return }
             Self.note("\(provider.displayName) refreshed: \(snapshot.health.shortLabel), \(snapshot.windows.count) windows via \(snapshot.source)")
             lastRefreshSucceeded[provider] = .now
             if snapshot.derivedRequestCount != nil, !previous.windows.isEmpty {
@@ -590,7 +597,8 @@ final class UsageStore: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !isErasing, enabledProviders.contains(provider),
+                  refreshGenerations[provider] == generation else { return }
             Self.note("\(provider.displayName) refresh failed: \(error.localizedDescription)")
             snapshots[provider] = Self.failedSnapshot(for: provider, previous: previous, error: error)
             SnapshotCache.save(Array(snapshots.values))

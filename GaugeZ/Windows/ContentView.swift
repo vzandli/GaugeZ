@@ -493,7 +493,7 @@ private struct GeneralSettingsPage: View {
             }
 
             SettingsGroup("Sessions") {
-                SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local metadata. Codex and Antigravity states are inferred from recent writes.") {
+                SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local data. Claude may read a bounded transcript tail when status is missing; transcript text stays on this Mac. Codex and Antigravity states are inferred from recent writes.") {
                     Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
                 }
                 SettingsRowDivider()

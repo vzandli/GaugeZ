@@ -24,6 +24,7 @@ struct ProviderRegressionTests {
         let suite = "GaugeZ.Tests.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        try await codenotchUpdates(root, defaults)
         try await portedFeatures(root, defaults)
         try profiles(root)
         try credentials()
@@ -46,6 +47,130 @@ struct ProviderRegressionTests {
         try await networking(root: root, defaults: defaults)
         try await grokNetworking(root: root, defaults: defaults)
         print("Passed \(checks) provider regression checks.")
+    }
+
+    static func codenotchUpdates(_ root: URL, _ defaults: UserDefaults) async throws {
+        let immediate = try await RefreshDeadline.run(timeout: .seconds(1)) { 42 }
+        try expect(immediate == 42, "Refresh completion returns before deadline")
+        let suspended = SuspendedRefresh()
+        let deadline = Task { try await RefreshDeadline.run(timeout: .milliseconds(30)) { await suspended.wait() } }
+        await suspended.waitUntilStarted()
+        do { _ = try await deadline.value; throw Failure(description: "Expected refresh timeout") }
+        catch let error as URLError { try expect(error.code == .timedOut, "Noncooperative provider cannot keep refresh waiting") }
+        await suspended.finish(10)
+        let next = try await RefreshDeadline.run(timeout: .seconds(1)) { 20 }
+        try expect(next == 20, "Late response cannot replace next refresh result")
+        let cancelledWork = SuspendedRefresh()
+        let cancelled = Task { try await RefreshDeadline.run(timeout: .seconds(60)) { await cancelledWork.wait() } }
+        await cancelledWork.waitUntilStarted()
+        cancelled.cancel()
+        do { _ = try await cancelled.value; throw Failure(description: "Expected cancellation") }
+        catch is CancellationError { checks += 1 }
+        await cancelledWork.finish(30)
+        func turn(_ text: String) -> ClaudeTranscript.Turn? { ClaudeTranscript.turn(inTail: Data(text.utf8)) }
+        try expect(turn(#"{"type":"user","message":{"content":"fixture"}}"#) == .inFlight, "Claude user turn starts work")
+        try expect(turn(#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#) == .inFlight, "Claude tool use continues work")
+        try expect(turn(#"{"type":"assistant","message":{"stop_reason":null}}"#) == .inFlight, "Streaming assistant does not falsely complete")
+        try expect(turn(#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#) == .finished, "Claude end turn finishes")
+        try expect(turn(#"{"type":"user","message":{"content":[{"text":"[Request interrupted by user]"}]}}"#) == .finished, "Esc ends Claude activity")
+        let finished = #"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#
+        try expect(turn(finished + "\n" + #"{"type":"bridge-session"}"# + "\n" + #"{"type":"user","isSidechain":true}"#) == .finished, "Bookkeeping and subagents cannot restart parent activity")
+        try expect(turn("partial line\n" + finished + "\n{unfinished") == .finished, "Partial transcript writes are skipped")
+        let projects = root.appendingPathComponent("projects")
+        let folder = projects.appendingPathComponent(ClaudeTranscript.projectSlug(forCWD: "/fixture/app"))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let transcript = folder.appendingPathComponent("fixture-session.jsonl")
+        try Data(finished.utf8).write(to: transcript)
+        let reader = ClaudeTranscriptReader(projects: projects)
+        let first = reader.activity(sessionID: "fixture-session", cwd: "/fixture/app")
+        try expect(first?.turn == .finished, "Find Claude transcript by profile project")
+        try Data((finished + "\n" + #"{"type":"bridge-session"}"#).utf8).write(to: transcript)
+        try expect(reader.activity(sessionID: "fixture-session", cwd: "/fixture/app")?.since == first?.since, "Bookkeeping preserves elapsed state time")
+        try expect(ClaudeTranscript.transcript(forSessionID: "../escape", cwd: "/fixture/app", in: projects, scanning: true) == nil, "Registry cannot traverse outside transcript directory")
+        // Exercise the registry-to-transcript integration with this fixture process as the live PID.
+        let liveProfile = ClaudeProfile(home: root)
+        try FileManager.default.createDirectory(at: liveProfile.sessionsDirectory, withIntermediateDirectories: true)
+        let liveProjects = liveProfile.directory.appendingPathComponent("projects")
+        let liveFolder = liveProjects.appendingPathComponent(ClaudeTranscript.projectSlug(forCWD: "/fixture/app"))
+        try FileManager.default.createDirectory(at: liveFolder, withIntermediateDirectories: true)
+        try Data(#"{"type":"user","message":{"content":"fixture"}}"#.utf8).write(to: liveFolder.appendingPathComponent("desktop-session.jsonl"))
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let started = ActivityReader.processStart(pid)!
+        var registry: [String: Any] = ["pid": pid, "cwd": "/fixture/app", "startedAt": started.timeIntervalSince1970 * 1000, "sessionId": "desktop-session"]
+        let registryFile = liveProfile.sessionsDirectory.appendingPathComponent("fixture.json")
+        try JSONSerialization.data(withJSONObject: registry).write(to: registryFile)
+        let activityReader = ActivityReader()
+        let desktopSessions = await activityReader.readClaudeSessions(profile: liveProfile)
+        try expect(desktopSessions.first?.state == .working && desktopSessions.first?.isInferred == true, "Claude desktop registry uses transcript when status is absent")
+        registry["status"] = "waiting"
+        try JSONSerialization.data(withJSONObject: registry).write(to: registryFile)
+        let waitingSessions = await activityReader.readClaudeSessions(profile: liveProfile)
+        try expect(waitingSessions.first?.state == .waiting && waitingSessions.first?.isInferred == false, "Explicit registry waiting takes precedence over transcript")
+        let renewal = ClaudeTokenRenewal()
+        let profile = ClaudeProfile(home: root)
+        let now = Date()
+        let healthy = await renewal.renew(expiry: now.addingTimeInterval(500), profile: profile, now: now, launch: { _ in throw Failure(description: "Must not launch") })
+        try expect(!healthy, "Healthy Claude token does not launch CLI")
+        let renewed = await renewal.renew(expiry: now, profile: profile, now: now, launch: { candidate in
+            guard candidate == profile else { throw Failure(description: "Wrong renewal profile") }
+        })
+        try expect(renewed, "Expiring token launches for correct profile")
+        let repeatAttempt = await renewal.renew(expiry: now, profile: profile, now: now.addingTimeInterval(700), launch: { _ in })
+        try expect(!repeatAttempt, "Failed expiry advancement never triggers repeated renewal")
+        let cooldown = await renewal.renew(expiry: now.addingTimeInterval(10), profile: profile, now: now.addingTimeInterval(20), launch: { _ in })
+        try expect(!cooldown, "Renewal cooldown spans token changes")
+        let failed = await renewal.renew(expiry: now.addingTimeInterval(10), profile: profile, now: now.addingTimeInterval(700), launch: { _ in throw CancellationError() })
+        try expect(!failed, "Cancelled renewal is not success")
+
+        let gemini = root.appendingPathComponent(".gemini")
+        try FileManager.default.createDirectory(at: gemini, withIntermediateDirectories: true)
+        let creds = Data(#"{"access_token":"cli-fixture","expiry_date":4102444800000}"#.utf8)
+        try creds.write(to: gemini.appendingPathComponent("oauth_creds.json"))
+        let loaded = try AntigravityCredentials.load(home: root, keychain: { throw SecretError.missing("fixture") })
+        try expect(loaded.accessToken == "cli-fixture" && loaded.isCLI, "CLI-only Gemini credentials work without Keychain sign-in")
+        try Data(#"{"access_token":"rotated-fixture","expiry_date":4102444800000}"#.utf8).write(to: gemini.appendingPathComponent("oauth_creds.json"))
+        let rotated = try AntigravityCredentials.load(home: root, keychain: { throw SecretError.denied("fixture") })
+        try expect(rotated.accessToken == "rotated-fixture", "CLI token rotation remains visible after Keychain refusal")
+        for invalid in [#"{"access_token":"token"}"#, #"{"access_token":"bad\nheader","expiry_date":4102444800000}"#, #"{"access_token":"token","expiry_date":true}"#] {
+            try expect(AntigravityCredentials.decodeCLI(Data(invalid.utf8), omp: false) == nil, "Reject missing expiry and malformed CLI credentials")
+        }
+        let omp = AntigravityCredentials.decodeCLI(Data(#"{"access":"omp-fixture","expires":4102444800000,"projectId":"fixture-project","email":"fixture@example.test"}"#.utf8), omp: true)!
+        try expect(omp.projectId == "fixture-project" && !omp.isExpired, "OMP milliseconds and project decoded")
+        let ompDirectory = root.appendingPathComponent(".omp/agent")
+        try FileManager.default.createDirectory(at: ompDirectory, withIntermediateDirectories: true)
+        var ompDB: OpaquePointer?
+        try expect(sqlite3_open(ompDirectory.appendingPathComponent("agent.db").path, &ompDB) == SQLITE_OK, "Open OMP fixture")
+        defer { sqlite3_close(ompDB) }
+        sqlite3_exec(ompDB, "PRAGMA journal_mode=WAL; CREATE TABLE auth_credentials(provider TEXT, data TEXT, updated_at INTEGER); INSERT INTO auth_credentials VALUES ('google-antigravity', '{\"access\":\"omp-fixture\",\"expires\":4102444800000,\"projectId\":\"fixture-project\"}', 1); INSERT INTO auth_credentials VALUES ('other-provider', '{\"access\":\"wrong-provider\",\"expires\":4102444800000}', 2)", nil, nil, nil)
+        let fromOMP = try AntigravityCredentials.load(home: root, keychain: { throw SecretError.missing("fixture") })
+        try expect(fromOMP.accessToken == "omp-fixture" && fromOMP.projectId == "fixture-project", "OMP WAL credentials are selected only for google-antigravity")
+        let flat = #"{"buckets":[{"modelId":"gemini-test","bucketId":"daily","remainingFraction":0.25,"resetTime":"2027-01-01T00:00:00Z"},{"modelId":"claude-test","bucketId":"daily","remainingFraction":0.5}]}"#
+        let windows = try AntigravityQuotaParser.remoteWindows(from: Data(flat.utf8))
+        try expect(windows.count == 2 && windows[0].remainingPercent == 25 && windows[0].resetsAt != nil, "Daily quota fractions retain distinct model buckets")
+        try rejects({ _ = try AntigravityQuotaParser.remoteWindows(from: Data(#"{"buckets":[{"modelId":"bad","remainingFraction":true}]}"#.utf8)) }, "Boolean cannot become free quota")
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, flat)]
+        let provider = AntigravityUsageProvider(remoteSession: session,
+            retryPolicy: ProviderRetryPolicy(provider: .antigravity, defaults: defaults),
+            localQuota: { throw AntigravityProviderError.noReachableServer }, loadCredentials: { omp },
+            readActivity: { AntigravityActivity(requestsToday: 0, lastRequest: nil) })
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.windows.count == 2 && snapshot.accountID == omp.email, "CLI-only Antigravity fetch returns live quota")
+        let request = FixtureProtocol.requests.last!
+        try expect(request.url?.host == "daily-cloudcode-pa.googleapis.com", "CLI quota uses daily endpoint")
+        let fixture = RenewalCredentialFixture()
+        FixtureProtocol.responses = [(200, #"{"five_hour":{"utilization":25}}"#), (200, "{}")]
+        let claude = ClaudeUsageProvider(profile: liveProfile, session: session,
+            retryPolicy: ProviderRetryPolicy(provider: .claude, defaults: defaults),
+            loadCredentials: { fixture.read() }, renewSignIn: { _ in fixture.rotate() }, selectedSource: { .claudeCode })
+        let recovered = try await claude.fetchSnapshot()
+        try expect(recovered.remainingPercent == 75 && fixture.launchCount == 1, "Expired Claude credential renews and fetches successfully")
+        try expect(FixtureProtocol.requests.suffix(2).allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer renewed-fixture" }, "Renewal sends only the new token")
+        // URLProtocol may expose the request body as a stream; endpoint and account are verified above.
     }
 
     static func portedFeatures(_ root: URL, _ defaults: UserDefaults) async throws {
@@ -487,6 +612,27 @@ struct ProviderRegressionTests {
         try expect(try parse()?.state == .waiting, "Pending plan needs input")
         row["unfinishedRunAt"] = now.timeIntervalSince1970 * 1000
         try expect(try parse()?.state == .waiting, "Waiting takes precedence over working")
+        row["isSubagent"] = true
+        try expect(try parse() == nil, "Nested Cursor agents never become waiting sessions")
+        row["isSubagent"] = "1"
+        try expect(try parse() == nil, "String subagent marker is recognized")
+        row.removeValue(forKey: "isSubagent")
+        row.removeValue(forKey: "unfinishedRunAt")
+        row["lastUpdatedAt"] = now.addingTimeInterval(-86400).timeIntervalSince1970 * 1000
+        try expect(try parse() == nil, "Old approval from previous Cursor launch is retired")
+        row["lastUpdatedAt"] = now.addingTimeInterval(-1800).timeIntervalSince1970 * 1000
+        try expect(try parse()?.state == .waiting, "Current-launch approval survives a long wait")
+        row["lastUpdatedAt"] = now.addingTimeInterval(-10).timeIntervalSince1970 * 1000
+        try expect(try parse(now)?.state == .waiting, "Recent approval survives editor restart")
+        row.removeValue(forKey: "lastUpdatedAt")
+        row["createdAt"] = now.addingTimeInterval(-86400).timeIntervalSince1970 * 1000
+        try expect(try parse() == nil, "Creation date retires approval without checkpoints")
+        row.removeValue(forKey: "createdAt")
+        try expect(try parse()?.state == .waiting, "Undated approval remains visible")
+        row["lastUpdatedAt"] = now.addingTimeInterval(60).timeIntervalSince1970 * 1000
+        try expect(try parse() == nil, "Future-dated approval is not live")
+        row["lastUpdatedAt"] = now.addingTimeInterval(-10).timeIntervalSince1970 * 1000
+        row["lastUpdatedAt"] = Date().timeIntervalSince1970 * 1000
         let dbURL = root.appendingPathComponent("cursor.sqlite")
         var db: OpaquePointer?
         guard sqlite3_open(dbURL.path, &db) == SQLITE_OK else { throw Failure(description: "Fixture DB failed") }
@@ -500,6 +646,12 @@ struct ProviderRegressionTests {
         sqlite3_finalize(statement)
         let sessions = await ActivityReader().readCursorSessions(launchedAt: launch, store: dbURL)
         try expect(sessions.count == 1 && sessions[0].state == .waiting, "Read Cursor rows from active WAL")
+        sqlite3_exec(db, "ALTER TABLE composerHeaders ADD COLUMN isSubagent INTEGER DEFAULT 0; UPDATE composerHeaders SET isSubagent = 1", nil, nil, nil)
+        let nested = await ActivityReader().readCursorSessions(launchedAt: launch, store: dbURL)
+        try expect(nested.isEmpty, "SQLite-only subagent marker excludes nested agents")
+        sqlite3_exec(db, "UPDATE composerHeaders SET isSubagent = 0", nil, nil, nil)
+        let parent = await ActivityReader().readCursorSessions(launchedAt: launch, store: dbURL)
+        try expect(parent.count == 1, "Modern Cursor schema retains parent chats")
         sqlite3_exec(db, "UPDATE composerHeaders SET isArchived = 1", nil, nil, nil)
         let archived = await ActivityReader().readCursorSessions(launchedAt: launch, store: dbURL)
         try expect(archived.isEmpty, "Archived Cursor chats excluded")
@@ -826,4 +978,28 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+/// Holds a provider reply past cancellation to exercise the real completion race.
+private actor SuspendedRefresh {
+    private var continuation: CheckedContinuation<Int, Never>?
+    func wait() async -> Int { await withCheckedContinuation { continuation = $0 } }
+    func waitUntilStarted() async {
+        while continuation == nil { await Task.yield() }
+    }
+    func finish(_ value: Int) { continuation?.resume(returning: value); continuation = nil }
+}
+
+private final class RenewalCredentialFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rotated = false
+    private var count = 0
+    var launchCount: Int { lock.withLock { count } }
+    func rotate() { lock.withLock { rotated = true; count += 1 } }
+    func read() -> ClaudeCredential {
+        lock.withLock {
+            ClaudeCredential(accessToken: rotated ? "renewed-fixture" : "expired-fixture",
+                expiresAt: rotated ? .distantFuture : .distantPast, subscriptionType: nil, sourceDescription: "fixture")
+        }
+    }
 }
