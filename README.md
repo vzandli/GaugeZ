@@ -41,6 +41,8 @@ rail on the edge of your screen. Hover to expand it, read the rings, get back to
 - **Make it yours.** Reorder providers, resize the notch, pick an edge and display, choose
   glass or solid, and decide whether GaugeZ shows in the Dock, the menu bar, or neither.
 - **Automatic updates.** Signed with EdDSA and delivered through Sparkle.
+- **In your language.** English and 21 other languages, switchable in
+  **Settings → General** without a restart.
 
 ## Providers
 
@@ -57,6 +59,15 @@ rail on the edge of your screen. Hover to expand it, read the rings, get back to
 
 Providers are independent. A failure in one never affects another, and each can be
 switched off in Settings. New providers start disabled on existing installations.
+
+## Languages
+
+GaugeZ follows your macOS language by default. **Settings → General → Language** picks
+one for the app alone, and it applies at once.
+
+Arabic, Bengali, Bosnian, Chinese (Simplified), Chinese (Hong Kong), English, Filipino,
+French, German, Hindi, Italian, Japanese, Korean, Marathi, Portuguese (Brazil), Russian,
+Spanish, Tamil, Telugu, Turkish, Urdu, and Vietnamese.
 
 ## Privacy
 

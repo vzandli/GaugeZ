@@ -74,7 +74,7 @@ struct AttachedSettingsView: View {
             enabled: store.glassEnabled
         ))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("GaugeZ settings")
+        .accessibilityLabel(Text("GaugeZ settings"))
     }
 
     private var indicatorColorBlock: some View {
@@ -107,11 +107,11 @@ struct AttachedSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func settingRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func settingRow<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         settingRowBody(title, content: content)
     }
 
-    private func settingRowBody<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func settingRowBody<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.caption2.weight(.semibold))
@@ -181,7 +181,7 @@ struct IndicatorColorPaletteView: View {
             .frame(width: 21, height: 21)
         }
         .buttonStyle(.plain)
-        .help(name)
+        .help(LocalizedStringKey(name))
     }
 
     private var customPickerButton: some View {

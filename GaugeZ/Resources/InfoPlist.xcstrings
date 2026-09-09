@@ -1,0 +1,167 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "CFBundleName" : {
+      "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "GaugeZ"
+          }
+        }
+      }
+    },
+    "NSAppleEventsUsageDescription" : {
+      "comment" : "Privacy - AppleEvents Sending Usage Description",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يفتح GaugeZ تطبيق Terminal لبدء Grok Build عند اختيار «فتح Grok Build»."
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "আপনি যখন 'Open Grok Build' বেছে নেন তখন Grok Build শুরু করার জন্য GaugeZ টার্মিনাল খোলে।"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ otvara Terminal za pokretanje aplikacije Grok Build kada odaberete Otvori Grok Build."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ öffnet das Terminal, um Grok Build zu starten, wenn Sie „Grok Build öffnen“ wählen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ opens Terminal to start Grok Build when you choose Open Grok Build."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ abre Terminal para iniciar Grok Build al seleccionar Abrir Grok Build."
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Binubuksan ng GaugeZ ang Terminal upang simulan ang Grok Build kapag pinili mo ang Buksan ang Grok Build."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ ouvre le Terminal pour lancer Grok Build lorsque vous choisissez « Ouvrir Grok Build »."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जब आप 'Open Grok Build' चुनते हैं तो Grok Build शुरू करने के लिए GaugeZ टर्मिनल खोलता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ apre il Terminale per avviare Grok Build quando scegli “Apri Grok Build”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「Grok Buildを開く」を選択すると、GaugeZはターミナルを開いてGrok Buildを起動します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grok Build 열기를 선택하면 GaugeZ가 터미널을 열어 Grok Build를 시작합니다."
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "तुम्ही 'Open Grok Build' निवडता तेव्हा Grok Build सुरू करण्यासाठी GaugeZ टर्मिनल उघडते."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O GaugeZ abre o Terminal para iniciar o Grok Build quando você seleciona Abrir Grok Build."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ открывает Терминал для запуска Grok Build при выборе команды «Открыть Grok Build»."
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Grok Build என்பதைத் தேர்ந்தெடுக்கும்போது Grok Build-ஐத் தொடங்க GaugeZ டெர்மினலைத் திறக்கும்."
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "మీరు Open Grok Build ఎంచుకున్నప్పుడు Grok Build ప్రారంభించడానికి GaugeZ టెర్మినల్‌ను తెరుస్తుంది."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grok Build'i Aç'ı seçtiğinizde GaugeZ, Grok Build'i başlatmak için Terminal'i açar."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جب آپ «Grok Build کھولیں» منتخب کرتے ہیں تو GaugeZ، Grok Build شروع کرنے کے لیے Terminal کھولتا ہے۔"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GaugeZ mở Terminal để khởi động Grok Build khi bạn chọn Mở Grok Build."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "當你選擇「開啟 Grok Build」時，GaugeZ 會開啟「終端機」以啟動 Grok Build。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当你选择“打开 Grok Build”时，GaugeZ 会打开“终端”以启动 Grok Build。"
+          }
+        }
+      }
+    },
+    "NSHumanReadableCopyright" : {
+      "comment" : "Copyright (human-readable)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Copyright © 2026 ZYORK SOFTWARE LLC. All rights reserved."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

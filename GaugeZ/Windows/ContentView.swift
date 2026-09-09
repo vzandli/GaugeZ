@@ -9,6 +9,16 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var title: LocalizedStringKey {
+        switch self {
+        case .general: "General"
+        case .providers: "Providers"
+        case .appearance: "Appearance"
+        case .diagnostics: "Diagnostics"
+        case .updates: "Updates"
+        }
+    }
+
     var symbol: String {
         switch self {
         case .general: "gearshape.fill"
@@ -78,9 +88,10 @@ struct SettingsView: View {
             }
         }
         .environmentObject(store)
+        .environment(\.locale, store.effectiveLocale)
         .preferredColorScheme(.dark)
         .tint(SettingsPalette.accent)
-        .frame(minWidth: 900, idealWidth: 980, minHeight: 560, idealHeight: 680)
+        .frame(minWidth: 948, idealWidth: 1028, minHeight: 560, idealHeight: 680)
     }
 }
 
@@ -109,7 +120,7 @@ private struct UpdatesSettingsPage: View {
 
                 SettingsControlRow(
                     title: "Current version",
-                    subtitle: updateManager.currentVersion
+                    subtitle: LocalizedStringKey(updateManager.currentVersion)
                 ) {
                     Button("Check Now") {
                         updateManager.checkForUpdates()
@@ -175,7 +186,7 @@ private struct SettingsSidebar: View {
                             Image(systemName: item.symbol)
                                 .font(.system(size: 13, weight: .semibold))
                                 .frame(width: 17)
-                            Text(item.rawValue)
+                            Text(item.title)
                                 .font(.system(size: 13, weight: .medium))
                             Spacer(minLength: 4)
                             if item == .providers {
@@ -227,7 +238,7 @@ private struct SettingsSidebar: View {
             }
             .padding(16)
         }
-        .frame(width: 188)
+        .frame(width: 236)
         .frame(maxHeight: .infinity)
         .background(SettingsPalette.sidebar.ignoresSafeArea())
     }
@@ -378,12 +389,12 @@ private struct ProviderSettingsRow: View {
                     .controlSize(.small)
                     .help(claudeSource.summary)
                 } else {
-                    Text(enabled ? snapshot.source : "Disabled")
+                    Text(enabled ? snapshot.source : String(localized: "Disabled", bundle: .language))
                         .font(.system(size: 10.5))
                         .foregroundStyle(SettingsPalette.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help(enabled ? snapshot.source : "Provider disabled")
+                        .help(enabled ? snapshot.source : String(localized: "Provider disabled", bundle: .language))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -445,15 +456,15 @@ private struct ProviderSettingsRow: View {
     }
 
     private var statusTitle: String {
-        guard enabled else { return "Not shown in rail" }
+        guard enabled else { return String(localized: "Not shown in rail", bundle: .language) }
         if let remaining = snapshot.remainingPercent {
-            return "\(PercentCopy.text(remaining))% remaining"
+            return String.localizedStringWithFormat(String(localized: "%@%% remaining", bundle: .language), PercentCopy.text(remaining))
         }
         return snapshot.health.shortLabel
     }
 
     private var statusDetail: String {
-        guard enabled else { return "Enable this provider to start tracking usage." }
+        guard enabled else { return String(localized: "Enable this provider to start tracking usage.", bundle: .language) }
         var details: [String] = []
         if let plan = snapshot.planName { details.append(plan) }
         if snapshot.health != .live, snapshot.remainingPercent != nil {
@@ -484,11 +495,21 @@ private struct GeneralSettingsPage: View {
                     Text(problem).font(.caption).foregroundStyle(.orange).padding(12)
                 }
                 SettingsRowDivider()
-                SettingsControlRow(title: "App presence", subtitle: store.appPresence.explanation) {
+                SettingsControlRow(title: "App presence", subtitle: store.appPresence.explanationKey) {
                     Picker("App presence", selection: $store.appPresence) {
-                        ForEach(AppPresence.allCases) { presence in Text(presence.title).tag(presence) }
+                        ForEach(AppPresence.allCases) { presence in Text(presence.titleKey).tag(presence) }
                     }
                     .labelsHidden().frame(width: 130)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Language", subtitle: "Choose GaugeZ's display language") {
+                    Picker("Language", selection: $store.appLanguage) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.displayName).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
                 }
             }
 
@@ -522,8 +543,8 @@ private struct GeneralSettingsPage: View {
 /// A system-sound menu with a play button beside it, so a pick can be heard before it fires for real.
 private struct ChimePickerRow: View {
     @EnvironmentObject private var store: UsageStore
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
     @Binding var selection: String
     let preview: () -> Void
 
@@ -543,8 +564,8 @@ private struct ChimePickerRow: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Play \(selection)")
-                .accessibilityLabel("Play \(selection)")
+                .help(Text("Play \(selection)"))
+                .accessibilityLabel(String.localizedStringWithFormat(String(localized: "Play %@", bundle: .language), selection))
             }
             .disabled(!store.activityEnabled)
         }
@@ -707,17 +728,18 @@ private struct AppearanceSettingsPage: View {
 
 /// A titled card of settings rows.
 private struct SettingsGroup<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     let content: Content
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
         self.title = title
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(title.uppercased())
+            Text(title)
+                .textCase(.uppercase)
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1.2)
                 .foregroundStyle(SettingsPalette.tertiary)
@@ -872,9 +894,9 @@ private struct DiagnosticsRow: View {
         if let window = snapshot.headlineWindow { parts.append(window.label) }
         if let plan = snapshot.planName { parts.append(plan) }
         if let retry = store.nextRetry(for: snapshot.provider) {
-            parts.append("Retry at " + retry.formatted(date: .omitted, time: .standard))
+            parts.append(String.localizedStringWithFormat(String(localized: "Retry at %@", bundle: .language), retry.formatted(date: .omitted, time: .standard)))
         } else {
-            parts.append("Observed " + snapshot.observedAt.formatted(date: .abbreviated, time: .shortened))
+            parts.append(String.localizedStringWithFormat(String(localized: "Observed %@", bundle: .language), snapshot.observedAt.formatted(date: .abbreviated, time: .shortened)))
         }
         return parts
     }
@@ -902,15 +924,15 @@ private struct SettingsPageContainer<Content: View>: View {
 }
 
 private struct SettingsPageHeader<Trailing: View>: View {
-    let eyebrow: String
-    let title: String
-    let subtitle: String
+    let eyebrow: LocalizedStringKey
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
     let trailing: Trailing
 
     init(
-        eyebrow: String,
-        title: String,
-        subtitle: String,
+        eyebrow: LocalizedStringKey,
+        title: LocalizedStringKey,
+        subtitle: LocalizedStringKey,
         @ViewBuilder trailing: () -> Trailing
     ) {
         self.eyebrow = eyebrow
@@ -940,17 +962,17 @@ private struct SettingsPageHeader<Trailing: View>: View {
 }
 
 private extension SettingsPageHeader where Trailing == EmptyView {
-    init(eyebrow: String, title: String, subtitle: String) {
+    init(eyebrow: LocalizedStringKey, title: LocalizedStringKey, subtitle: LocalizedStringKey) {
         self.init(eyebrow: eyebrow, title: title, subtitle: subtitle) { EmptyView() }
     }
 }
 
 private struct SettingsControlRow<Control: View>: View {
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
     let control: Control
 
-    init(title: String, subtitle: String, @ViewBuilder control: () -> Control) {
+    init(title: LocalizedStringKey, subtitle: LocalizedStringKey, @ViewBuilder control: () -> Control) {
         self.title = title
         self.subtitle = subtitle
         self.control = control()
@@ -984,7 +1006,7 @@ private struct SettingsRowDivider: View {
 }
 
 private struct SummaryPill: View {
-    let text: String
+    let text: LocalizedStringKey
     let symbol: String
     let color: Color
 

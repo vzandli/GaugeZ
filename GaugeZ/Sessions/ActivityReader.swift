@@ -8,6 +8,15 @@ struct ActivitySession: Identifiable, Equatable, Sendable {
         case waiting = "Needs your input"
         case idle = "Idle"
         case unknown = "Activity unknown"
+
+        var localizedLabel: String {
+            switch self {
+            case .working: String(localized: "Working", bundle: .language)
+            case .waiting: String(localized: "Needs your input", bundle: .language)
+            case .idle: String(localized: "Idle", bundle: .language)
+            case .unknown: String(localized: "Activity unknown", bundle: .language)
+            }
+        }
     }
     let id: String
     let provider: ProviderID

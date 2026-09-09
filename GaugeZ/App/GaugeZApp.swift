@@ -33,6 +33,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] presence in self?.applyPresence(presence) }
             .store(in: &cancellables)
+        store.$appLanguage
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.configureMainMenu()
+                if self.statusItem != nil {
+                    self.statusItem?.menu = self.makeMenu()
+                }
+            }
+            .store(in: &cancellables)
 
         rebuildPanels()
         store.$selectedDisplayID.dropFirst().removeDuplicates().receive(on: DispatchQueue.main)
@@ -198,9 +210,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openUsage() {
-        let window = usageWindow ?? NSWindow(contentViewController: NSHostingController(rootView: UsageOverviewView(store: store)))
+        let rootView = UsageOverviewView(store: store).environment(\.locale, store.effectiveLocale)
+        let window = usageWindow ?? NSWindow(contentViewController: NSHostingController(rootView: rootView))
         usageWindow = window
-        window.title = "GaugeZ Usage"
+        window.title = String(localized: "GaugeZ Usage", bundle: .language)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 440, height: 620))
@@ -213,9 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeSettingsWindow() -> NSWindow {
-        let hosting = NSHostingController(rootView: SettingsView(store: store, updateManager: updateManager))
+        let rootView = SettingsView(store: store, updateManager: updateManager).environment(\.locale, store.effectiveLocale)
+        let hosting = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hosting)
-        window.title = "GaugeZ Settings"
+        window.title = String(localized: "GaugeZ Settings", bundle: .language)
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
@@ -256,18 +270,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "Show GaugeZ", action: #selector(toggleNotch), keyEquivalent: "")
-        menu.addItem(withTitle: "Usage…", action: #selector(openUsage), keyEquivalent: "u")
-        menu.addItem(withTitle: "Refresh Usage", action: #selector(refreshUsage), keyEquivalent: "r")
-        let providers = NSMenuItem(title: "Refresh Provider", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: String(localized: "Show GaugeZ", bundle: .language), action: #selector(toggleNotch), keyEquivalent: "")
+        menu.addItem(withTitle: String(localized: "Usage…", bundle: .language), action: #selector(openUsage), keyEquivalent: "u")
+        menu.addItem(withTitle: String(localized: "Refresh Usage", bundle: .language), action: #selector(refreshUsage), keyEquivalent: "r")
+        let providers = NSMenuItem(title: String(localized: "Refresh Provider", bundle: .language), action: nil, keyEquivalent: "")
         providers.submenu = NSMenu()
         menu.addItem(providers)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
-        let settingsItem = menu.addItem(withTitle: "Settings…", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        menu.addItem(withTitle: String(localized: "Check for Updates…", bundle: .language), action: #selector(checkForUpdates), keyEquivalent: "")
+        let settingsItem = menu.addItem(withTitle: String(localized: "Settings…", bundle: .language), action: #selector(openSettingsWindow), keyEquivalent: ",")
         settingsItem.image = nil
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit GaugeZ", action: #selector(quit), keyEquivalent: "q")
+        menu.addItem(withTitle: String(localized: "Quit GaugeZ", bundle: .language), action: #selector(quit), keyEquivalent: "q")
 
         for menuItem in menu.items {
             menuItem.target = self
@@ -287,7 +301,7 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     private func syncMenuState(_ menu: NSMenu) {
-        if let submenu = menu.items.first(where: { $0.title == "Refresh Provider" })?.submenu {
+        if let submenu = menu.items.first(where: { $0.submenu != nil })?.submenu {
             submenu.removeAllItems()
             for provider in store.visibleProviders {
                 let item = submenu.addItem(withTitle: provider.displayName, action: #selector(refreshProvider(_:)), keyEquivalent: "")
@@ -299,10 +313,10 @@ extension AppDelegate: NSMenuDelegate {
         }
         if let toggleItem = menu.items.first {
             let isExpanded = edgePanelControllers.contains(where: \.isExpanded)
-            toggleItem.title = isExpanded ? "Hide GaugeZ" : "Show GaugeZ"
+            toggleItem.title = isExpanded ? String(localized: "Hide GaugeZ", bundle: .language) : String(localized: "Show GaugeZ", bundle: .language)
         }
         if let updateItem = menu.items.first(where: { $0.action == #selector(checkForUpdates) }) {
-            updateItem.title = updateManager.pendingUpdateVersion.map { "Update to \($0) Available…" } ?? "Check for Updates…"
+            updateItem.title = updateManager.pendingUpdateVersion.map { String(localized: "Update to \($0) Available…", bundle: .language) } ?? String(localized: "Check for Updates…", bundle: .language)
         }
         for item in menu.items {
             item.image = nil

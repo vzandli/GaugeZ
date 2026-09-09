@@ -49,8 +49,12 @@ final class ThresholdAlerts: NSObject, UNUserNotificationCenterDelegate {
             for alert in alerts {
                 guard !Task.isCancelled else { return }
                 let content = UNMutableNotificationContent()
-                content.title = alert.threshold == 100 ? "\(alert.provider.displayName) limit reached" : "\(alert.provider.displayName): \(PercentCopy.text(alert.remaining))% left"
-                content.body = alert.windowLabel + (alert.resetsAt.map { " · Resets \(ResetCopy.absolute($0))" } ?? "")
+                let title = alert.threshold == 100
+                    ? String.localizedStringWithFormat(String(localized: "%@ limit reached", bundle: .language), alert.provider.displayName)
+                    : String.localizedStringWithFormat(String(localized: "%@: %@%% left", bundle: .language), alert.provider.displayName, PercentCopy.text(alert.remaining))
+                content.title = title
+                let resetPart = alert.resetsAt.map { String.localizedStringWithFormat(String(localized: " · Resets %@", bundle: .language), ResetCopy.absolute($0)) } ?? ""
+                content.body = alert.windowLabel + resetPart
                 content.threadIdentifier = alert.provider.rawValue
                 try? await center.add(UNNotificationRequest(identifier: "\(alert.provider.rawValue).\(alert.threshold).\(UUID())", content: content, trigger: nil))
             }

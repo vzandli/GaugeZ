@@ -24,6 +24,23 @@ final class UsageStore: ObservableObject {
     @Published var appPresence: AppPresence {
         didSet { UserDefaults.standard.set(appPresence.rawValue, forKey: Keys.appPresence) }
     }
+    /// In-app language choice. Defaults to system language.
+    @Published var appLanguage: AppLanguage {
+        didSet {
+            UserDefaults.standard.set(appLanguage.rawValue, forKey: Keys.appLanguage)
+            if appLanguage == .system {
+                UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+            } else {
+                UserDefaults.standard.set([appLanguage.rawValue], forKey: "AppleLanguages")
+            }
+            Bundle.setLanguage(appLanguage.bundleLanguageCode)
+            NotificationCenter.default.post(name: .appLanguageDidChange, object: nil)
+        }
+    }
+    /// The effective locale for formatting and SwiftUI environment injection.
+    var effectiveLocale: Locale {
+        appLanguage.locale
+    }
     /// Liquid Glass surfaces instead of solid black.
     @Published var glassEnabled: Bool {
         didSet { UserDefaults.standard.set(glassEnabled, forKey: Keys.glassEnabled) }
@@ -364,6 +381,12 @@ final class UsageStore: ObservableObject {
         appPresence = AppPresence(
             rawValue: UserDefaults.standard.string(forKey: Keys.appPresence) ?? ""
         ) ?? .menuBar
+        let savedLanguage = UserDefaults.standard.string(forKey: Keys.appLanguage) ?? "system"
+        let initialLanguage = AppLanguage(rawValue: savedLanguage) ?? .system
+        appLanguage = initialLanguage
+        // A leftover override from an earlier build would keep beating the system choice.
+        if initialLanguage == .system { UserDefaults.standard.removeObject(forKey: "AppleLanguages") }
+        Bundle.setLanguage(initialLanguage.bundleLanguageCode)
         claudeSource = ClaudeSource(
             rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? ""
         ) ?? .desktop
@@ -730,6 +753,7 @@ final class UsageStore: ObservableObject {
         static let displayMode = "displayMode"
         static let edgeSide = "edgeSide"
         static let appPresence = "appPresence"
+        static let appLanguage = "appLanguage"
         static let claudeSource = "claudeSource"
         static let glassEnabled = "glassEnabled"
         static let glassOpacity = "glassOpacity"

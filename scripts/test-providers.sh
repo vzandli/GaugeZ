@@ -15,7 +15,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$build_dir/module-cache" \
   GaugeZ/Sessions/ActivityReader.swift GaugeZ/Sessions/AntigravityActivity.swift \
   GaugeZ/Sessions/SessionCompletionWatcher.swift GaugeZ/Sessions/ClaudeTranscript.swift \
   GaugeZ/Credentials/ClaudeTokenRenewal.swift GaugeZ/Model/RefreshDeadline.swift \
-  GaugeZ/App/ReleaseNotes.swift \
+  GaugeZ/App/ReleaseNotes.swift GaugeZ/App/AppLanguage.swift \
   Tests/ProviderRegressionTests.swift -o "$build_dir/provider-tests"
 "$build_dir/provider-tests"
 "$build_dir/provider-tests"

@@ -59,7 +59,7 @@ struct ProviderRegressionTests {
         catch let error as URLError { try expect(error.code == .timedOut, "Noncooperative provider cannot keep refresh waiting") }
         await suspended.finish(10)
         let next = try await RefreshDeadline.run(timeout: .seconds(1)) { 20 }
-        try expect(next == 20, "Late response cannot replace next refresh result")
+        try expect(next == 20, "Late completion after timeout is dropped without disturbing later refreshes")
         let cancelledWork = SuspendedRefresh()
         let cancelled = Task { try await RefreshDeadline.run(timeout: .seconds(60)) { await cancelledWork.wait() } }
         await cancelledWork.waitUntilStarted()
@@ -73,6 +73,13 @@ struct ProviderRegressionTests {
         try expect(turn(#"{"type":"assistant","message":{"stop_reason":null}}"#) == .inFlight, "Streaming assistant does not falsely complete")
         try expect(turn(#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#) == .finished, "Claude end turn finishes")
         try expect(turn(#"{"type":"user","message":{"content":[{"text":"[Request interrupted by user]"}]}}"#) == .finished, "Esc ends Claude activity")
+        try expect(turn(#"{"type":"user","message":{"content":"<command-name>/cost</command-name>"}}"#) == .finished, "Local slash command does not start Claude work")
+        try expect(turn(#"{"type":"user","message":{"content":[{"type":"text","text":"<local-command-stdout>ok</local-command-stdout>"}]}}"#) == .finished, "Local command output does not start Claude work")
+        try expect(ClaudeTranscript.projectSlug(forCWD: "/Users/x/Library/Application Support/Claude/.w") == "-Users-x-Library-Application-Support-Claude--w", "Claude project slug dashes every non-alphanumeric character")
+        try expect(AppLanguage.systemLanguageCode(preferred: ["tr-TR", "en-US"], available: ["en", "tr", "de"]) == "tr", "System language follows the global preference list")
+        try expect(AppLanguage.systemLanguageCode(preferred: ["en-GB"], available: ["en", "tr", "de"]) == "en", "System language falls back to English")
+        try expect(AppLanguage.systemLanguageCode(preferred: ["pt-BR", "en"], available: ["en", "pt-BR", "tr"]) == "pt-BR", "System language keeps regional variants")
+        try expect(AppLanguage.system.bundleLanguageCode == AppLanguage.systemLanguageCode(), "System choice reads the system language bundle")
         let finished = #"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#
         try expect(turn(finished + "\n" + #"{"type":"bridge-session"}"# + "\n" + #"{"type":"user","isSidechain":true}"#) == .finished, "Bookkeeping and subagents cannot restart parent activity")
         try expect(turn("partial line\n" + finished + "\n{unfinished") == .finished, "Partial transcript writes are skipped")

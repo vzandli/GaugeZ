@@ -65,6 +65,8 @@ actor ClaudeUsageProvider: UsageProviding {
 
     private func fetchViaClaudeCode() async throws -> UsageSnapshot {
         var credential = try loadClaudeCodeCredential()
+        // Backoff applies before a renewal too: no CLI launch while Claude has asked us to wait.
+        try retryPolicy.check()
         if await renewal.renew(expiry: credential.expiresAt, profile: profile, launch: renewSignIn) {
             credentialCache.forget()
             let fresh = try loadClaudeCodeCredential()

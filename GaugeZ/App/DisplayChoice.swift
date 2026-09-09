@@ -31,7 +31,7 @@ struct DisplayChoice: Identifiable {
     }
 
     static func current() -> [DisplayChoice] {
-        [DisplayChoice(id: "main", name: "Main display"), DisplayChoice(id: "all", name: "All displays")] + NSScreen.screens.map {
+        [DisplayChoice(id: "main", name: String(localized: "Main display", bundle: .language)), DisplayChoice(id: "all", name: String(localized: "All displays", bundle: .language))] + NSScreen.screens.map {
             DisplayChoice(id: identifier(for: $0), name: $0.localizedName)
         }
     }

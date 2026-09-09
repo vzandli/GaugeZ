@@ -49,7 +49,7 @@ struct ProviderMeterView: View {
                             .background(.black, in: Circle())
                             .offset(x: -17 * scale, y: -16 * scale)
                             .symbolEffect(.pulse, options: .repeating, isActive: activity.state == .working && !reduceMotion)
-                            .accessibilityLabel(activity.state.rawValue)
+                            .accessibilityLabel(activity.state.localizedLabel)
                     }
                     if let badge = statusBadge {
                         Image(systemName: badge)
@@ -121,12 +121,16 @@ struct ProviderMeterView: View {
 
     private var helpText: String {
         if let remaining = snapshot.remainingPercent {
-            let window = snapshot.headlineWindow?.label ?? "Quota"
-            let activity = knownActivity.map { " · " + $0.state.rawValue } ?? ""
-            return "\(PercentCopy.text(remaining))% remaining · \(window) · \(snapshot.health.shortLabel)\(activity)"
+            let window = snapshot.headlineWindow?.label ?? String(localized: "Quota", bundle: .language)
+            let activity = knownActivity.map { " · " + $0.state.localizedLabel } ?? ""
+            let format = String(localized: "%@%% remaining · %@ · %@%@", bundle: .language)
+            return String.localizedStringWithFormat(format, PercentCopy.text(remaining), window, snapshot.health.shortLabel, activity)
         }
-        if let count = snapshot.derivedRequestCount { return "Derived: \(count) model turns today · no published quota" }
-        if snapshot.headlineWindowID != nil { return "Selected quota window unavailable" }
+        if let count = snapshot.derivedRequestCount {
+            let format = String(localized: "Derived: %lld model turns today · no published quota", bundle: .language)
+            return String.localizedStringWithFormat(format, Int64(count))
+        }
+        if snapshot.headlineWindowID != nil { return String(localized: "Selected quota window unavailable", bundle: .language) }
         return snapshot.health.shortLabel
     }
 

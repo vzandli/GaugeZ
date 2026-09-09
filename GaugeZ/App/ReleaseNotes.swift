@@ -24,6 +24,20 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.9",
+            headline: "GaugeZ speaks your language.",
+            changes: [
+                .init("21 languages besides English",
+                      "Arabic, Bengali, Bosnian, Chinese (Simplified and Hong Kong), Filipino, French, German, Hindi, Italian, Japanese, Korean, Marathi, Portuguese (Brazil), Russian, Spanish, Tamil, Telugu, Turkish, Urdu, and Vietnamese."),
+                .init("Pick one in Settings → General",
+                      "The Language menu applies at once, no restart. System (Default) follows macOS."),
+                .init("Claude sessions no longer get stuck",
+                      "Desktop-app sessions are found again, and a local slash command such as /cost no longer shows as Working."),
+                .init("Token renewal for the default Claude Code sign-in",
+                      "Renewal now works for the default profile and waits out rate-limit backoff before launching the CLI.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.8",
             headline: "Settings, sorted.",
             changes: [

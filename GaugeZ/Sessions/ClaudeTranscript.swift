@@ -31,11 +31,12 @@ enum ClaudeTranscript {
     // MARK: - Where the file is
 
     /// The directory Claude Code files a working directory's transcripts under:
-    /// the path with every `/` and `.` turned into `-`, so
-    /// `/Users/x/app/.claude/worktrees/y` becomes
-    /// `-Users-x-app--claude-worktrees-y`.
+    /// the path with every character other than an ASCII letter or digit turned
+    /// into `-`, so `/Users/x/app/.claude/worktrees/y` becomes
+    /// `-Users-x-app--claude-worktrees-y` and a space in `Application Support`
+    /// becomes a dash too.
     static func projectSlug(forCWD cwd: String) -> String {
-        String(cwd.map { $0 == "/" || $0 == "." ? "-" : $0 })
+        String(cwd.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
     /// The transcript for one session, or nil if it has not been written yet.
@@ -127,7 +128,9 @@ enum ClaudeTranscript {
                 default: return .inFlight
                 }
             case "user":
-                return isInterruption(json) ? .finished : .inFlight
+                // A slash command that ran locally is logged as a user record with no
+                // reply to come, so it ends the turn rather than starting one.
+                return isInterruption(json) || isLocalCommand(json) ? .finished : .inFlight
             default:
                 continue
             }
@@ -141,13 +144,28 @@ enum ClaudeTranscript {
     private static let interruption = "[Request interrupted by user"
 
     static func isInterruption(_ json: [String: Any]) -> Bool {
+        userText(json) { $0.hasPrefix(interruption) }
+    }
+
+    /// Local slash commands (`/cost`, `/clear`, …) leave user records wrapped in
+    /// these tags and nothing else; no assistant turn follows them.
+    private static let localCommandTags = ["<command-name>", "<local-command-stdout>", "<local-command-caveat>"]
+
+    static func isLocalCommand(_ json: [String: Any]) -> Bool {
+        userText(json) { text in
+            let trimmed = text.drop(while: \.isWhitespace)
+            return localCommandTags.contains { trimmed.hasPrefix($0) }
+        }
+    }
+
+    private static func userText(_ json: [String: Any], matches: (String) -> Bool) -> Bool {
         guard let message = json["message"] as? [String: Any] else { return false }
         switch message["content"] {
         case let text as String:
-            return text.hasPrefix(interruption)
+            return matches(text)
         case let blocks as [Any]:
             return blocks.contains { block in
-                ((block as? [String: Any])?["text"] as? String)?.hasPrefix(interruption) == true
+                ((block as? [String: Any])?["text"] as? String).map(matches) == true
             }
         default:
             return false

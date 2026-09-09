@@ -51,7 +51,7 @@ final class UpdateManager: ObservableObject {
     var currentVersion: String {
         let marketingVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
-        return "Version \(marketingVersion) (\(build))"
+        return String.localizedStringWithFormat(String(localized: "Version %@ (%@)", bundle: .language), marketingVersion, build)
     }
 
     func checkForUpdates() {

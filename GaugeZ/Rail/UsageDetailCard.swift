@@ -34,8 +34,8 @@ struct UsageDetailCard: View {
                 Button { SessionFocus.activate(event.session) } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(event.reason == .blocked ? "Needs your input" : event.session.isInferred ? "Activity paused · inferred" : "Session finished").font(.caption.weight(.semibold))
-                            Text(event.session.name + " · Open app").font(.caption2).lineLimit(1)
+                            Text(event.reason == .blocked ? String(localized: "Needs your input", bundle: .language) : event.session.isInferred ? String(localized: "Activity paused · inferred", bundle: .language) : String(localized: "Session finished", bundle: .language)).font(.caption.weight(.semibold))
+                            Text(event.session.name + " · " + String(localized: "Open app", bundle: .language)).font(.caption2).lineLimit(1)
                         }
                     } icon: {
                         Image(systemName: event.reason == .blocked ? "hand.raised.fill" : "checkmark.circle.fill")
@@ -254,8 +254,8 @@ struct UsageDetailCard: View {
         switch snapshot.health {
         case .unavailable(let message), .stale(let message), .signedOut(let message), .permissionRequired(let message):
             message
-        case .loading: "Refreshing usage…"
-        case .live: "No usage windows were reported."
+        case .loading: String(localized: "Refreshing usage…", bundle: .language)
+        case .live: String(localized: "No usage windows were reported.", bundle: .language)
         }
     }
 
@@ -266,14 +266,17 @@ struct UsageDetailCard: View {
 
     private static func sessionsTitle(for provider: ProviderID) -> String {
         switch provider.kind {
-        case .claude: "CLAUDE CODE SESSIONS"
-        default: "\(provider.displayName.uppercased()) SESSIONS"
+        case .claude: String(localized: "CLAUDE CODE SESSIONS", bundle: .language)
+        default: String.localizedStringWithFormat(String(localized: "%@ SESSIONS", bundle: .language), provider.displayName.uppercased())
         }
     }
 
     /// "Working · GaugeZ · 6 min", with inferred states marked as such.
     static func sessionLine(_ session: ActivitySession, now: Date) -> String {
-        var parts = [session.isInferred ? "\(session.state.rawValue) (inferred)" : session.state.rawValue, session.project]
+        let stateText = session.isInferred
+            ? String.localizedStringWithFormat(String(localized: "%@ (inferred)", bundle: .language), session.state.localizedLabel)
+            : session.state.localizedLabel
+        var parts = [stateText, session.project]
         if let since = session.since, session.state != .unknown {
             parts.append(ElapsedCopy.text(since: since, now: now))
         }
@@ -287,12 +290,13 @@ struct UsageDetailCard: View {
 
     private static func age(of date: Date, at now: Date) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
-        if seconds < 60 { return "just now" }
+        if seconds < 60 { return String(localized: "just now", bundle: .language) }
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour, .minute] : [.day, .hour])
         formatter.unitsStyle = .short
         formatter.maximumUnitCount = 2
-        return (formatter.string(from: seconds) ?? "") + " ago"
+        let formatted = formatter.string(from: seconds) ?? ""
+        return String.localizedStringWithFormat(String(localized: "%@ ago", bundle: .language), formatted)
     }
 
     private static func absoluteReset(_ date: Date) -> String {

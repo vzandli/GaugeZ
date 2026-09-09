@@ -19,6 +19,27 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Resources/Translations/ar.json,
+				Resources/Translations/bn.json,
+				Resources/Translations/bs.json,
+				Resources/Translations/de.json,
+				Resources/Translations/es.json,
+				Resources/Translations/fil.json,
+				Resources/Translations/fr.json,
+				Resources/Translations/hi.json,
+				Resources/Translations/it.json,
+				Resources/Translations/ja.json,
+				Resources/Translations/ko.json,
+				Resources/Translations/mr.json,
+				"Resources/Translations/pt-BR.json",
+				Resources/Translations/ru.json,
+				Resources/Translations/ta.json,
+				Resources/Translations/te.json,
+				Resources/Translations/tr.json,
+				Resources/Translations/ur.json,
+				Resources/Translations/vi.json,
+				"Resources/Translations/zh-HK.json",
+				"Resources/Translations/zh-Hans.json",
 			);
 			target = 654BE52E30487F52007C200F /* GaugeZ */;
 		};
@@ -110,6 +131,27 @@
 			knownRegions = (
 				en,
 				Base,
+				ar,
+				bn,
+				bs,
+				"zh-HK",
+				fr,
+				de,
+				hi,
+				it,
+				ja,
+				ko,
+				"zh-Hans",
+				mr,
+				"pt-BR",
+				ru,
+				es,
+				fil,
+				ta,
+				te,
+				tr,
+				ur,
+				vi,
 			);
 			mainGroup = 654BE52630487F52007C200F;
 			minimizedProjectReferenceProxies = 1;
@@ -275,7 +317,7 @@
 				CODE_SIGN_ENTITLEMENTS = GaugeZ/GaugeZ.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = 8FKL69633T;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -287,11 +329,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.8;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vzyork.GaugeZ;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -308,7 +350,7 @@
 				CODE_SIGN_ENTITLEMENTS = GaugeZ/GaugeZ.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = 8FKL69633T;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -320,11 +362,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.8;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vzyork.GaugeZ;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = YES;

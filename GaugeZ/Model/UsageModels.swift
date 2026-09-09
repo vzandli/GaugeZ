@@ -144,12 +144,12 @@ enum ProviderHealth: Equatable, Sendable {
 
     var shortLabel: String {
         switch self {
-        case .loading: "Refreshing"
-        case .live: "Live"
-        case .stale: "Stale"
-        case .signedOut: "Signed out"
-        case .permissionRequired: "Permission needed"
-        case .unavailable: "Unavailable"
+        case .loading: String(localized: "Refreshing", bundle: .language)
+        case .live: String(localized: "Live", bundle: .language)
+        case .stale: String(localized: "Stale", bundle: .language)
+        case .signedOut: String(localized: "Signed out", bundle: .language)
+        case .permissionRequired: String(localized: "Permission needed", bundle: .language)
+        case .unavailable: String(localized: "Unavailable", bundle: .language)
         }
     }
 
@@ -171,13 +171,17 @@ enum ProviderHealth: Equatable, Sendable {
 enum ElapsedCopy {
     static func text(since: Date, now: Date = .now) -> String {
         let seconds = max(0, now.timeIntervalSince(since))
-        if seconds < 45 { return "just now" }
+        if seconds < 45 { return String(localized: "just now", bundle: .language) }
         let minutes = Int((seconds / 60).rounded())
-        if minutes < 60 { return "\(max(1, minutes)) min" }
+        if minutes < 60 {
+            return String.localizedStringWithFormat(String(localized: "%lld min", bundle: .language), Int64(max(1, minutes)))
+        }
         let hours = minutes / 60
         let rest = minutes % 60
-        if rest == 0 { return "\(hours) hr" }
-        return "\(hours) hr \(rest) min"
+        if rest == 0 {
+            return String.localizedStringWithFormat(String(localized: "%lld hr", bundle: .language), Int64(hours))
+        }
+        return String.localizedStringWithFormat(String(localized: "%lld hr %lld min", bundle: .language), Int64(hours), Int64(rest))
     }
 }
 
@@ -408,15 +412,15 @@ enum ClaudeSource: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .desktop: "Desktop app"
-        case .claudeCode: "Claude Code CLI"
+        case .desktop: String(localized: "Desktop app", bundle: .language)
+        case .claudeCode: String(localized: "Claude Code CLI", bundle: .language)
         }
     }
 
     var summary: String {
         switch self {
-        case .desktop: "Reads Claude Desktop's sign-in via Keychain for live reset times, or falls back to the desktop usage log."
-        case .claudeCode: "Reads the Claude Code CLI sign-in from Keychain and asks Claude directly. macOS will ask you to allow it."
+        case .desktop: String(localized: "Reads Claude Desktop's sign-in via Keychain for live reset times, or falls back to the desktop usage log.", bundle: .language)
+        case .claudeCode: String(localized: "Reads the Claude Code CLI sign-in from Keychain and asks Claude directly. macOS will ask you to allow it.", bundle: .language)
         }
     }
 }
@@ -430,9 +434,9 @@ enum DisplayMode: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .always: "Always show"
-        case .hover: "Show on hover"
-        case .hidden: "Hide"
+        case .always: String(localized: "Always show", bundle: .language)
+        case .hover: String(localized: "Show on hover", bundle: .language)
+        case .hidden: String(localized: "Hide", bundle: .language)
         }
     }
 }
@@ -445,7 +449,14 @@ enum EdgeSide: String, CaseIterable, Identifiable, Sendable {
 
     var isHorizontal: Bool { self == .top || self == .bottom }
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String {
+        switch self {
+        case .right: String(localized: "Right", bundle: .language)
+        case .left: String(localized: "Left", bundle: .language)
+        case .top: String(localized: "Top", bundle: .language)
+        case .bottom: String(localized: "Bottom", bundle: .language)
+        }
+    }
 }
 
 /// Keep exact values for rings and thresholds; round only at the last display step.

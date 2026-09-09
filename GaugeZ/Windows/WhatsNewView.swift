@@ -125,7 +125,7 @@ final class WhatsNewWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "What's New in GaugeZ"
+        window.title = String(localized: "What's New in GaugeZ", bundle: .language)
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true

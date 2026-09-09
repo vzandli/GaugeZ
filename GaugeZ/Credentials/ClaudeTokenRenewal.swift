@@ -50,7 +50,9 @@ enum ClaudeRenewalProcess {
         for key in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDECODE", "CLAUDE_CODE_OAUTH_TOKEN"] {
             environment[key] = nil
         }
-        environment["CLAUDE_CONFIG_DIR"] = profile.directory.path
+        // The default profile must run without CLAUDE_CONFIG_DIR: setting it makes the CLI
+        // look for the hashed Keychain item, which the default sign-in does not use.
+        environment["CLAUDE_CONFIG_DIR"] = profile.provider.profileSlug == nil ? nil : profile.directory.path
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice

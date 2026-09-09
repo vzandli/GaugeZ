@@ -114,11 +114,14 @@ struct EdgePanelContentView: View {
     let actions: EdgePanelActions
 
     var body: some View {
-        if store.edgeSide.isHorizontal {
-            HorizontalRailView(state: state, actions: actions)
-        } else {
-            verticalContent
+        Group {
+            if store.edgeSide.isHorizontal {
+                HorizontalRailView(state: state, actions: actions)
+            } else {
+                verticalContent
+            }
         }
+        .environment(\.locale, store.effectiveLocale)
     }
 
     private var verticalContent: some View {
