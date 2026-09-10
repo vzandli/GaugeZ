@@ -208,44 +208,32 @@ struct UsageDetailCard: View {
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
-                    GlassGroup(enabled: store.glassEnabled) {
-                        HStack(spacing: 8) {
-                            Button("Use \(alternative.label.lowercased())") { store.claudeSource = alternative }
-                                .glassControl(enabled: store.glassEnabled)
-                        }
-                        .controlSize(.small)
-                    }
+                    Button("Use \(alternative.label.lowercased())") { store.claudeSource = alternative }
+                        .glassControl(enabled: store.glassEnabled, expands: false)
                 }
             }
 
             if let error = store.actionErrors[snapshot.provider] {
                 Text(error).font(.caption2).foregroundStyle(.orange)
             }
-            HStack {
+            // Two buttons of one size while both fit; see `ButtonPairRow` for the long-name case.
+            ButtonPairRow(spacing: 10) {
                 Button(store.refreshing.contains(snapshot.provider) ? "Refreshing…" : "Refresh") { store.retry(snapshot.provider) }
                     .disabled(store.refreshing.contains(snapshot.provider) || store.nextRetry(for: snapshot.provider) != nil)
                     .glassControl(enabled: store.glassEnabled)
-                Spacer()
                 Button(action: openProvider) {
                     Label("Open \(snapshot.provider.displayName)", systemImage: "arrow.up.forward.app")
-                        .font(.caption2.weight(.semibold))
                 }
                 .glassControl(enabled: store.glassEnabled)
-                .foregroundStyle(.white.opacity(0.85))
             }
-            .padding(.top, 2)
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(24)
         .foregroundStyle(.white)
+        // No surface of its own: the container paints one behind the card and its pointer
+        // together, so the two never show a seam or a second rim where they meet.
         .frame(width: RailMetrics.attachmentWidth - RailMetrics.pointerDepth)
-        .modifier(RailGlass.Surface(
-            shape: RoundedRectangle(cornerRadius: 20, style: .continuous),
-            glassOpacity: store.glassOpacity,
-            tint: RailGlass.cardTint(opacity: store.glassOpacity),
-            interactive: false,
-            enabled: store.glassEnabled
-        ))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(snapshot.provider.displayName) usage details")
     }

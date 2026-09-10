@@ -33,46 +33,38 @@ struct AttachedSettingsView: View {
             }
 
             settingRow("Show") {
-                Picker("Show", selection: $store.displayMode) {
-                    ForEach(DisplayMode.allCases) { Text($0.label).tag($0) }
-                }
+                GlassSegmentedPicker(selection: $store.displayMode, options: DisplayMode.allCases,
+                                     label: \.label, glass: store.glassEnabled)
+                    .accessibilityLabel("Show")
             }
 
             // Set-once choices (Claude source, surface, notch size) live in the Settings window;
             // the card keeps only what gets flipped in the moment.
             settingRow("Edge") {
-                Picker("Edge", selection: $store.edgeSide) {
-                    ForEach(EdgeSide.allCases) { Text($0.label).tag($0) }
-                }
+                GlassSegmentedPicker(selection: $store.edgeSide, options: EdgeSide.allCases,
+                                     label: \.label, glass: store.glassEnabled)
+                    .accessibilityLabel("Edge")
             }
 
             indicatorColorBlock
 
-            GlassGroup(enabled: store.glassEnabled) {
-                HStack {
-                    Button("Refresh", action: store.refresh)
-                        .glassControl(enabled: store.glassEnabled)
-                    Spacer()
-                    Button("Preferences…") {
-                        NotificationCenter.default.post(name: .gaugezOpenSettings, object: nil)
-                    }
+            // Two buttons of one size while both fit; see `ButtonPairRow` for the long-name case.
+            ButtonPairRow(spacing: 10) {
+                Button("Refresh", action: store.refresh)
                     .glassControl(enabled: store.glassEnabled)
+                Button("Preferences…") {
+                    NotificationCenter.default.post(name: .gaugezOpenSettings, object: nil)
                 }
-                .controlSize(.small)
-                .padding(.top, 2)
+                .glassControl(enabled: store.glassEnabled)
             }
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .foregroundStyle(.white)
+        // No surface of its own: the container paints one behind the card and its pointer
+        // together, so the two never show a seam or a second rim where they meet.
         .frame(width: RailMetrics.attachmentWidth - RailMetrics.pointerDepth)
-        .modifier(RailGlass.Surface(
-            shape: RoundedRectangle(cornerRadius: 20, style: .continuous),
-            glassOpacity: store.glassOpacity,
-            tint: RailGlass.panelTint(opacity: store.glassOpacity),
-            interactive: false,
-            enabled: store.glassEnabled
-        ))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("GaugeZ settings"))
     }
@@ -117,9 +109,6 @@ struct AttachedSettingsView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.55))
             content()
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

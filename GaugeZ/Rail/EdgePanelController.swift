@@ -24,6 +24,15 @@ final class EdgePanelController {
     /// Pointer position when the window moved away from under it; see `routePointer`.
     private var pendingCollapseOrigin: NSPoint?
     private var isDragging = false
+    /// The resize grip's last reported frame, in panel coordinates with a top-left origin.
+    private var resizeGripFrame: CGRect = .null
+    /// A resize drag is in flight, so the cursor stays the resize arrows wherever the pointer is.
+    private var isResizingRail = false
+    /// Whether the resize cursor is what this controller last set.
+    private var showsResizeCursor = false
+    /// The app that was active before GaugeZ took activation for the resize cursor, to be
+    /// given it back the moment the pointer leaves the grip.
+    private var appBeforeResizeCursor: NSRunningApplication?
     /// The usable area the rail was last placed against; see `followUsableAreaIfItMoved`.
     private var lastUsableArea: NSRect = .zero
     private var usableAreaTimer: Timer?
@@ -124,6 +133,7 @@ final class EdgePanelController {
             panel.ignoresMouseEvents = !over
             debugNote("pointer \(over ? "over" : "off") content at \(Int(location.x)),\(Int(location.y)) rects \(interactiveRects.map { "\(Int($0.minX))-\(Int($0.maxX))" })")
         }
+        updateResizeCursor()
         // After the window itself moved (edge switch) the rail slid out from under the pointer
         // without a hover-exit event. Keep what was open until the pointer clearly moves away.
         if let origin = pendingCollapseOrigin {
@@ -133,6 +143,52 @@ final class EdgePanelController {
                 pendingCollapseOrigin = nil
                 scheduleCollapse()
             }
+        }
+    }
+
+    /// The resize grip on screen, from the frame the handle last reported.
+    private var resizeGripScreenRect: NSRect {
+        guard !resizeGripFrame.isNull else { return .null }
+        let frame = panel.frame
+        return NSRect(x: frame.minX + resizeGripFrame.minX,
+                      y: frame.maxY - resizeGripFrame.maxY,
+                      width: resizeGripFrame.width, height: resizeGripFrame.height)
+    }
+
+    /// The resize cursor over the grip, and only there.
+    ///
+    /// macOS honours a cursor only from the active app; from any other it is refused outright,
+    /// however it is set — `NSCursor.current` changes and the pointer on screen does not.
+    /// This panel is non-activating by design, so GaugeZ is almost never the active app while
+    /// the pointer is on it (Codenotch's pointing hand is refused the same way). So for the
+    /// resize cursor, and only for it, GaugeZ takes activation while the pointer is on the
+    /// grip — a 48pt-by-8pt mark you reach on purpose — and hands it straight back to the app
+    /// that had it the moment the pointer leaves or the drag ends. That app loses key focus
+    /// for that moment, which is the price of a real cursor here.
+    private func updateResizeCursor() {
+        let location = NSEvent.mouseLocation
+        let onGrip = state.isExpanded && resizeGripScreenRect.insetBy(dx: -2, dy: -2).contains(location)
+        if state.resizeGripHovered != onGrip { state.resizeGripHovered = onGrip }
+        if onGrip || isResizingRail {
+            if !showsResizeCursor {
+                showsResizeCursor = true
+                if !NSApp.isActive {
+                    appBeforeResizeCursor = NSWorkspace.shared.frontmostApplication
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                store.edgeSide.resizeCursor.push()
+            } else {
+                // Activation lands a beat after it is asked for; the cursor set alongside it
+                // was refused, so it is set again on every move until it shows.
+                store.edgeSide.resizeCursor.set()
+            }
+        } else if showsResizeCursor {
+            showsResizeCursor = false
+            NSCursor.pop()
+            if let app = appBeforeResizeCursor, app != .current {
+                app.activate()
+            }
+            appBeforeResizeCursor = nil
         }
     }
 
@@ -271,6 +327,11 @@ final class EdgePanelController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        // Pinned dark on the window, not just in SwiftUI's environment: the Liquid Glass
+        // backdrop resolves its material against the window's appearance, and the rail's ink
+        // is white throughout. Left to follow the Mac, light mode would draw light glass under
+        // white text.
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -287,7 +348,12 @@ final class EdgePanelController {
             gearZoneHover: { [weak self] _ in self?.scheduleDebugSnapshot() },
             dragStarted: { [weak self] in self?.dragStarted() },
             dragMoved: { [weak self] screenY in self?.dragMoved(screenY: screenY) },
-            dragEnded: { [weak self] in self?.dragEnded() }
+            dragEnded: { [weak self] in self?.dragEnded() },
+            resizeGripFrameChanged: { [weak self] frame in self?.resizeGripFrame = frame },
+            railResizeChanged: { [weak self] resizing in
+                self?.isResizingRail = resizing
+                if !resizing { self?.routePointer() }
+            }
         )
         let root = EdgePanelContentView(state: state, actions: actions).environmentObject(store)
         let view = NSHostingView(rootView: AnyView(root))

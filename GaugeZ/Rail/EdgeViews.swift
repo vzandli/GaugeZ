@@ -22,6 +22,10 @@ final class EdgePanelState: ObservableObject {
     @Published var topInset: CGFloat = 0
     /// The display's own notch when the rail is joined to it; nil elsewhere.
     @Published var joinedNotch: HardwareNotch?
+    /// The pointer is on the resize grip, as the controller's pointer monitor sees it. The
+    /// grip's own view cannot tell on the side edges: its native drag view sits on top and
+    /// takes the hit, so SwiftUI's hover never reaches the SwiftUI view around it.
+    @Published var resizeGripHovered = false
 }
 
 struct EdgePanelActions {
@@ -34,6 +38,11 @@ struct EdgePanelActions {
     var dragStarted: () -> Void = {}
     var dragMoved: (CGFloat) -> Void = { _ in }
     var dragEnded: () -> Void = {}
+    /// The resize grip's frame in panel coordinates (top-left origin), whenever it moves.
+    /// The controller sets the resize cursor from this — see `EdgePanelController.updateResizeCursor`.
+    var resizeGripFrameChanged: (CGRect) -> Void = { _ in }
+    /// A resize drag began or ended, so the cursor is held through it.
+    var railResizeChanged: (Bool) -> Void = { _ in }
 }
 
 /// Geometry shared by the views and the window controller. Points.
@@ -51,7 +60,11 @@ enum RailMetrics {
     static let baseBodyCornerRadius: CGFloat = 30
 
     static let collapsedWidth: CGFloat = 14
+    /// The resize grip's thickness across the rail's inner edge …
     static let resizeGripWidth: CGFloat = 8
+    /// … and its length along it: the indicator in the middle of the border, with a little
+    /// margin, rather than the whole edge. The cursor and the drag belong to that mark alone.
+    static let resizeGripLength: CGFloat = 48
     static let baseGearButtonSize: CGFloat = 42
     static let baseGearZoneHeight: CGFloat = 46
     static let baseGearOverlap: CGFloat = 10
@@ -59,6 +72,9 @@ enum RailMetrics {
     static let attachmentWidth: CGFloat = 370
     static let attachmentGap: CGFloat = 8
     static let pointerDepth: CGFloat = 12
+    /// The pointer's base, measured along the card edge it grows from.
+    static let pointerLength: CGFloat = 26
+    static let cardCornerRadius: CGFloat = 20
 
     static func expandedWidth(scale: CGFloat = 1.0) -> CGFloat { (baseExpandedWidth * scale).rounded() }
     static func ringSize(scale: CGFloat = 1.0) -> CGFloat { (baseRingSize * scale).rounded() }
@@ -122,6 +138,7 @@ struct EdgePanelContentView: View {
             }
         }
         .environment(\.locale, store.effectiveLocale)
+        .environmentObject(state)
     }
 
     private var verticalContent: some View {
@@ -344,6 +361,8 @@ private final class DragGripNSView: NSView {
 /// not the rendering edge, so the same view works inside the rotated horizontal rail.
 struct RailResizeHandle: View {
     @EnvironmentObject private var store: UsageStore
+    @EnvironmentObject private var panelState: EdgePanelState
+    let actions: EdgePanelActions
     /// Scale band around 1.0 where the drag snaps to the default size.
     private static let snapBand = 0.05
     @State private var isHovered = false
@@ -354,6 +373,9 @@ struct RailResizeHandle: View {
 
     var body: some View {
         let side = store.edgeSide
+        // Either source: SwiftUI's hover reaches this view on the horizontal edges, where
+        // the grip is laid outside the rail; on the side edges only the controller sees it.
+        let hovered = isHovered || panelState.resizeGripHovered
         return ZStack {
             NativeResizeGrip(
                 edge: side,
@@ -363,6 +385,7 @@ struct RailResizeHandle: View {
                     initialLocation = startPoint
                     // Already at the default: don't tap on the first pixel of movement.
                     hasHapticSnapped = abs(startScale - 1.0) < Self.snapBand
+                    actions.railResizeChanged(true)
                 },
                 onResizeMove: { currentPoint in
                     let baseWidth = RailMetrics.baseExpandedWidth
@@ -399,27 +422,54 @@ struct RailResizeHandle: View {
                 },
                 onResizeEnd: {
                     isResizing = false
+                    actions.railResizeChanged(false)
                 },
                 onDoubleClick: {
                     NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
                     store.resetRailScale()
-                },
-                onHover: { inside in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        isHovered = inside
-                    }
                 }
             )
 
-            // Faint visual affordance along the inner edge
+            // The indicator: hidden at rest, shown under the pointer, brightest while
+            // dragging. Lying along whichever way the edge runs — this view is never
+            // rotated, whatever the rail around it does.
             Capsule()
-                .fill(Color.white.opacity(isResizing ? 0.38 : (isHovered ? 0.22 : 0.0)))
-                .frame(width: 3, height: 32)
-                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isHovered)
+                .fill(Color.white.opacity(isResizing ? 0.38 : (hovered ? 0.26 : 0.0)))
+                .frame(width: side.isHorizontal ? 32 : 3, height: side.isHorizontal ? 3 : 32)
+                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hovered)
                 .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isResizing)
                 .allowsHitTesting(false)
         }
+        // Hover through SwiftUI, not the native grip's tracking area: in this panel — which
+        // ignores mouse events until the pointer is over the rail, and never becomes key —
+        // AppKit's tracking fired on some visits and not others. SwiftUI's is dependable.
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.15)) { isHovered = inside }
+        }
+        // Where the grip is, for the cursor. The controller keeps the pointer under watch
+        // on every move already; the cursor is its to set, from this rect.
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame in
+            actions.resizeGripFrameChanged(frame)
+        }
         .help("Drag to resize meter notch (Double-click to reset)")
+    }
+}
+
+extension EdgeSide {
+    /// The window-edge resize cursor pointing at the rail's inner side, the edge being
+    /// dragged; plain two-headed arrows before macOS 15.
+    var resizeCursor: NSCursor {
+        if #available(macOS 15, *) {
+            let position: NSCursor.FrameResizePosition
+            switch self {
+            case .right: position = .left
+            case .left: position = .right
+            case .top: position = .bottom
+            case .bottom: position = .top
+            }
+            return .frameResize(position: position, directions: .all)
+        }
+        return isHorizontal ? .resizeUpDown : .resizeLeftRight
     }
 }
 
@@ -429,7 +479,6 @@ private struct NativeResizeGrip: NSViewRepresentable {
     let onResizeMove: (NSPoint) -> Void
     let onResizeEnd: () -> Void
     let onDoubleClick: () -> Void
-    let onHover: (Bool) -> Void
 
     func makeNSView(context: Context) -> ResizeGripNSView {
         let view = ResizeGripNSView(edge: edge)
@@ -437,7 +486,6 @@ private struct NativeResizeGrip: NSViewRepresentable {
         view.onResizeMove = onResizeMove
         view.onResizeEnd = onResizeEnd
         view.onDoubleClick = onDoubleClick
-        view.onHover = onHover
         return view
     }
 
@@ -447,21 +495,21 @@ private struct NativeResizeGrip: NSViewRepresentable {
         nsView.onResizeMove = onResizeMove
         nsView.onResizeEnd = onResizeEnd
         nsView.onDoubleClick = onDoubleClick
-        nsView.onHover = onHover
     }
 }
 
+/// The part of the grip that has to be AppKit: a drag tracked from `mouseDown`, which
+/// SwiftUI's gestures cannot do from inside a panel that never becomes key. Hover and the
+/// cursor are handled elsewhere — see `RailResizeHandle` and
+/// `EdgePanelController.updateResizeCursor`.
 private final class ResizeGripNSView: NSView {
     var edge: EdgeSide
     var onResizeStart: ((NSPoint) -> Void)?
     var onResizeMove: ((NSPoint) -> Void)?
     var onResizeEnd: (() -> Void)?
     var onDoubleClick: (() -> Void)?
-    var onHover: ((Bool) -> Void)?
 
-    private var trackingArea: NSTrackingArea?
     private var isResizing = false
-    private var cursorPushed = false
 
     init(edge: EdgeSide) {
         self.edge = edge
@@ -471,85 +519,28 @@ private final class ResizeGripNSView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
-        let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    /// The window-edge resize cursor pointing at the edge being dragged; plain two-headed
-    /// arrows before macOS 15. Pushed on hover rather than via cursor rects, which AppKit only
-    /// honours in the key window and this non-activating panel never becomes key.
-    private var resizeCursor: NSCursor {
-        if #available(macOS 15, *) {
-            let position: NSCursor.FrameResizePosition
-            switch edge {
-            case .right: position = .left
-            case .left: position = .right
-            case .top: position = .bottom
-            case .bottom: position = .top
-            }
-            return .frameResize(position: position, directions: .all)
-        }
-        return edge.isHorizontal ? .resizeUpDown : .resizeLeftRight
-    }
-
-    private func showResizeCursor() {
-        guard !cursorPushed else { return }
-        resizeCursor.push()
-        cursorPushed = true
-    }
-
-    private func restoreCursor() {
-        guard cursorPushed else { return }
-        NSCursor.pop()
-        cursorPushed = false
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        showResizeCursor()
-        onHover?(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        guard !isResizing else { return }
-        restoreCursor()
-        onHover?(false)
-    }
-
     override func mouseDown(with event: NSEvent) {
         if event.clickCount >= 2 {
             onDoubleClick?()
             return
         }
         isResizing = true
-        showResizeCursor()
-        onHover?(true)
+        edge.resizeCursor.set()
         onResizeStart?(NSEvent.mouseLocation)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard isResizing else { return }
+        // Re-asserted every move: the pointer is soon well outside the grip, and whatever
+        // it is over must not take the cursor back mid-drag.
+        edge.resizeCursor.set()
         onResizeMove?(NSEvent.mouseLocation)
     }
 
     override func mouseUp(with event: NSEvent) {
         guard isResizing else { return }
         isResizing = false
-        let isInside = bounds.contains(convert(event.locationInWindow, from: nil))
-        if !isInside { restoreCursor() }
-        onHover?(isInside)
         onResizeEnd?()
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil { restoreCursor() }
     }
 }
 
@@ -565,8 +556,20 @@ struct EdgeRailView: View {
     var contentRotation: Double = 0
     /// Joined to a hardware notch the rail shows nothing at rest: the notch itself is the tab.
     var hidesCollapsedPill = false
+    /// The resize grip is a native view, and AppKit tracks the pointer against its
+    /// unrotated frame: inside the `rotationEffect` the horizontal rail applies, its hover
+    /// region ends up as a vertical strip nowhere near the drawn grip, so the cursor never
+    /// changes and the drag cannot start. `HorizontalRailView` turns this off and lays its
+    /// own grip along the rail's inner edge, outside the rotation.
+    var showsResizeGrip = true
+
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
     @State private var gearZoneHovered = false
+    /// The gear's rim sweep, run each time the pointer arrives on it.
+    @State private var gearSweep: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var gearReduceMotion
 
     var body: some View {
         let edge = renderingEdge ?? store.edgeSide
@@ -593,10 +596,13 @@ struct EdgeRailView: View {
                 // doesn't sit over the shoulder curve or the drag handle. It's a native view, so
                 // AppKit hit-tests it before any SwiftUI content regardless of z-order: keep it
                 // narrow enough to stay inside the meter rows' side margin.
-                RailResizeHandle()
-                    .frame(width: RailMetrics.resizeGripWidth, height: RailMetrics.bodyHeight(providerCount: providers.count, scale: scale))
-                    .padding(.top, RailMetrics.shoulderHeight(scale: scale))
-                    .frame(maxWidth: .infinity, alignment: edge == .right ? .leading : .trailing)
+                if showsResizeGrip {
+                    let bodyHeight = RailMetrics.bodyHeight(providerCount: providers.count, scale: scale)
+                    RailResizeHandle(actions: actions)
+                        .frame(width: RailMetrics.resizeGripWidth, height: RailMetrics.resizeGripLength)
+                        .padding(.top, RailMetrics.shoulderHeight(scale: scale) + (bodyHeight - RailMetrics.resizeGripLength) / 2)
+                        .frame(maxWidth: .infinity, alignment: edge == .right ? .leading : .trailing)
+                }
             } else if !hidesCollapsedPill {
                 collapsedPill(edge: edge)
                     .transition(.opacity.animation(.easeOut(duration: 0.12)))
@@ -642,6 +648,15 @@ struct EdgeRailView: View {
         gearZoneHovered || state.attachment == .settings
     }
 
+    /// The gear's own specular ring belongs to the frosted imitation and the solid style.
+    /// System glass draws its rim itself, and brightens the disc on hover because that
+    /// surface is interactive; a second ring over it reads as an outline, not a highlight.
+    private var gearDrawsOwnRing: Bool {
+        !(RailGlass.systemGlassAvailable
+          && RailGlass.rendersGlass(enabled: store.glassEnabled,
+                                    reduceTransparency: reduceTransparency, contrast: contrast))
+    }
+
     /// The body: Liquid Glass tinted near-black, or solid black with a hairline outline.
     @ViewBuilder
     private func railSurface(edge: EdgeSide, scale: CGFloat) -> some View {
@@ -679,6 +694,7 @@ struct EdgeRailView: View {
                         lineWidth: 1
                     )
                     .frame(width: buttonSize, height: buttonSize)
+                    .opacity(gearDrawsOwnRing ? 1 : 0)
 
                 // Mechanical rotating gear icon
                 Image(systemName: "gearshape")
@@ -700,6 +716,7 @@ struct EdgeRailView: View {
                 enabled: store.glassEnabled,
                 shadowed: false
             ))
+            .modifier(RimSweep(shape: Circle(), lineWidth: 1.5, progress: gearSweep))
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -723,6 +740,10 @@ struct EdgeRailView: View {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.70)) {
                 gearZoneHovered = inside
             }
+            if inside && !gearReduceMotion {
+                withTransaction(Transaction(animation: nil)) { gearSweep = 0 }
+                withAnimation(.easeInOut(duration: 0.7)) { gearSweep = 1 }
+            }
             actions.gearZoneHover(inside)
         }
         .help("GaugeZ settings (Right-click for options)")
@@ -744,14 +765,21 @@ struct EdgeRailView: View {
             }
         }
         .padding(internalPadding)
-        .background(
-            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                .fill(Color(red: 0.13, green: 0.13, blue: 0.13).opacity(0.92))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+        // The same material as the open rail, so the resting pill reads as the rail folded
+        // rather than as a different object waiting where it was.
+        .background {
+            let pill = RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+            if store.glassEnabled {
+                RailGlass.Frosted(
+                    shape: pill,
+                    glassOpacity: store.glassOpacity,
+                    tint: RailGlass.railTint(opacity: store.glassOpacity)
                 )
-        )
+            } else {
+                pill.fill(Color(red: 0.13, green: 0.13, blue: 0.13).opacity(0.92))
+                pill.strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+            }
+        }
         .padding(edge == .right ? .trailing : .leading, 2)
         .frame(maxWidth: .infinity, alignment: edge == .right ? .trailing : .leading)
         .padding(.top, (RailMetrics.shapeHeight(providerCount: providers.count, scale: CGFloat(store.railScale)) - totalHeight) / 2)
@@ -794,30 +822,39 @@ private struct AttachmentColumn: View {
     private func card(for attachment: EdgeAttachment) -> some View {
         let anchorY = anchorCenterY(for: attachment)
         let topPadding = max(0, min(anchorY - contentHeight / 2, shapeHeight - contentHeight))
-        let pointerY = anchorY - topPadding
+        let cardHeight = min(contentHeight, shapeHeight)
+        // Only a provider's card points at its ring; settings sit level with the rail's middle.
+        let pointerCenter: CGFloat? = {
+            if case .detail = attachment { return anchorY - topPadding }
+            return nil
+        }()
 
-        return ZStack(alignment: edge == .right ? .topTrailing : .topLeading) {
-            if case .detail = attachment {
-                CardPointerView(edge: edge)
-                    .frame(width: RailMetrics.pointerDepth, height: 26)
-                    .offset(
-                        x: edge == .right ? RailMetrics.pointerDepth : -RailMetrics.pointerDepth,
-                        y: max(20, min(pointerY, contentHeight - 20)) - 13
-                    )
-            }
-
-            ScrollView {
-                content(for: attachment)
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
-                        if contentHeight != newHeight { contentHeight = newHeight }
-                    }
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(contentHeight, shapeHeight))
-            .onHover(perform: actions.attachmentHover)
+        // The card and its pointer are one silhouette with one surface behind them, not a
+        // card with a triangle parked beside it: two pieces of glass would each grow their
+        // own rim where they meet, and a seam is the one thing a pointer must not have.
+        // The surface sits on the container rather than on the contents, so it neither
+        // scrolls away with a tall card nor is clipped by the scroll view.
+        return ScrollView {
+            content(for: attachment)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
+                    if contentHeight != newHeight { contentHeight = newHeight }
+                }
         }
-        .frame(width: RailMetrics.attachmentWidth, alignment: edge == .right ? .trailing : .leading)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: RailMetrics.attachmentWidth - RailMetrics.pointerDepth, height: cardHeight)
+        .clipShape(RoundedRectangle(cornerRadius: RailMetrics.cardCornerRadius, style: .continuous))
+        .onHover(perform: actions.attachmentHover)
+        // Room for the pointer on the rail side, inside the surface's bounds.
         .padding(edge == .right ? .trailing : .leading, RailMetrics.pointerDepth)
+        .modifier(RailGlass.Surface(
+            shape: AttachmentSilhouette(edge: edge, pointerCenter: pointerCenter),
+            glassOpacity: store.glassOpacity,
+            tint: RailGlass.cardTint(opacity: store.glassOpacity),
+            interactive: false,
+            enabled: store.glassEnabled
+        ))
+        .frame(width: RailMetrics.attachmentWidth + RailMetrics.pointerDepth,
+               alignment: edge == .right ? .trailing : .leading)
         .padding(.top, topPadding)
     }
 
@@ -882,9 +919,14 @@ struct EdgeNotchOutline: Shape {
         var path = Path()
         path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
         // Concave shoulder: tangent to the screen edge, ending tangent to the body top.
+        //
+        // The edge-side handle sits 0.32 of the shoulder from the tip — the mirror of the
+        // foot's, which is 0.68 of the foot from the *body*. Both used to say 0.68 and were
+        // measured from opposite ends, so the shoulder hugged the edge 5pt longer than the
+        // foot and then turned in more sharply; the two curves are the same shape now.
         path.addCurve(
             to: CGPoint(x: inner + corner, y: bodyTop),
-            control1: CGPoint(x: rect.maxX, y: rect.minY + shoulder * 0.68),
+            control1: CGPoint(x: rect.maxX, y: rect.minY + shoulder * 0.32),
             control2: CGPoint(x: inner + corner + span * 0.7, y: bodyTop)
         )
         path.addArc(
@@ -922,84 +964,66 @@ struct ProviderLogo: View {
     }
 }
 
-/// Triangle on the rail side of a detail card.
-struct CardPointer: Shape {
+/// A detail card and its pointer as one outline: the rounded card, and a triangle on the
+/// rail side pointing at the ring the card describes. Drawn as a union so a surface painted
+/// in it has one edge, with no seam where the pointer meets the card.
+struct AttachmentSilhouette: Shape {
+    /// The screen edge the rail is on, which is the side the pointer grows from.
     let edge: EdgeSide
+    /// Where the pointer is centred, measured along the rail-side edge from the shape's
+    /// origin; nil draws the card alone. Kept on the straight run of that edge, clear of
+    /// the corner arcs, so the base of the pointer always meets a flat side.
+    var pointerCenter: CGFloat?
+    var cornerRadius: CGFloat = RailMetrics.cardCornerRadius
 
     func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.closeSubpath()
-        return edge == .left ? path.mirrored(in: rect) : path
-    }
-}
+        let depth = RailMetrics.pointerDepth
+        let length = RailMetrics.pointerLength
+        // Overlaps the card by a hair, so the union never leaves a hairline gap along the base.
+        let overlap: CGFloat = 1
 
-/// Outline of the pointer's two slanted legs (omitting the base touching the card).
-struct CardPointerOutline: Shape {
-    let edge: EdgeSide
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        return edge == .left ? path.mirrored(in: rect) : path
-    }
-}
-
-/// Caret view with Liquid Glass frosted blur or solid fill and matching hairline stroke.
-struct CardPointerView: View {
-    @EnvironmentObject private var store: UsageStore
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-    let edge: EdgeSide
-
-    var body: some View {
-        let shape = CardPointer(edge: edge)
-        let outline = CardPointerOutline(edge: edge)
-
-        ZStack {
-            shape.fill(.black.opacity(store.glassEnabled ? store.glassOpacity * 0.18 : 0.35))
-                .blur(radius: store.glassEnabled ? 6 : 8)
-                .offset(y: 3)
-
-            if store.glassEnabled && !reduceTransparency && contrast != .increased {
-                let clampedOpacity = max(0.0, min(1.0, store.glassOpacity))
-                BehindWindowBlur(material: .popover)
-                    .clipShape(shape)
-                    .opacity(max(0.22, 0.28 + clampedOpacity * 0.72))
-                shape.fill(RailGlass.cardTint(opacity: store.glassOpacity))
-                shape.fill(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(0.12), location: 0.0),
-                            .init(color: .white.opacity(0.03), location: 0.40),
-                            .init(color: .clear, location: 1.0)
-                        ],
-                        startPoint: edge == .right ? .topLeading : .topTrailing,
-                        endPoint: edge == .right ? .bottomTrailing : .bottomLeading
-                    )
-                )
-                outline.stroke(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(0.40), location: 0.0),
-                            .init(color: .white.opacity(0.18), location: 0.40),
-                            .init(color: .white.opacity(0.08), location: 1.0)
-                        ],
-                        startPoint: edge == .right ? .topLeading : .topTrailing,
-                        endPoint: edge == .right ? .bottomTrailing : .bottomLeading
-                    ),
-                    lineWidth: 0.75
-                )
-            } else {
-                shape.fill(Color(white: 0.04))
-                outline.stroke(.white.opacity(contrast == .increased ? 0.75 : 0.1), lineWidth: 1)
-            }
+        var cardRect = rect
+        switch edge {
+        case .right:  cardRect.size.width -= depth
+        case .left:   cardRect.origin.x += depth; cardRect.size.width -= depth
+        case .top:    cardRect.origin.y += depth; cardRect.size.height -= depth
+        case .bottom: cardRect.size.height -= depth
         }
-        .allowsHitTesting(false)
+        var path = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).path(in: cardRect)
+
+        guard let pointerCenter else { return path }
+        let sideLength = edge.isHorizontal ? cardRect.width : cardRect.height
+        let margin = cornerRadius + length / 2
+        // A card shorter than two corners has no straight side to point from.
+        guard sideLength >= margin * 2 else { return path }
+        let centre = max(margin, min(sideLength - margin, pointerCenter))
+
+        var pointer = Path()
+        switch edge {
+        case .right:
+            let base = cardRect.maxX - overlap
+            pointer.move(to: CGPoint(x: base, y: cardRect.minY + centre - length / 2))
+            pointer.addLine(to: CGPoint(x: rect.maxX, y: cardRect.minY + centre))
+            pointer.addLine(to: CGPoint(x: base, y: cardRect.minY + centre + length / 2))
+        case .left:
+            let base = cardRect.minX + overlap
+            pointer.move(to: CGPoint(x: base, y: cardRect.minY + centre - length / 2))
+            pointer.addLine(to: CGPoint(x: rect.minX, y: cardRect.minY + centre))
+            pointer.addLine(to: CGPoint(x: base, y: cardRect.minY + centre + length / 2))
+        case .top:
+            let base = cardRect.minY + overlap
+            pointer.move(to: CGPoint(x: cardRect.minX + centre - length / 2, y: base))
+            pointer.addLine(to: CGPoint(x: cardRect.minX + centre, y: rect.minY))
+            pointer.addLine(to: CGPoint(x: cardRect.minX + centre + length / 2, y: base))
+        case .bottom:
+            let base = cardRect.maxY - overlap
+            pointer.move(to: CGPoint(x: cardRect.minX + centre - length / 2, y: base))
+            pointer.addLine(to: CGPoint(x: cardRect.minX + centre, y: rect.maxY))
+            pointer.addLine(to: CGPoint(x: cardRect.minX + centre + length / 2, y: base))
+        }
+        pointer.closeSubpath()
+        path = path.union(pointer)
+        return path
     }
 }
 

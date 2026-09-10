@@ -24,6 +24,18 @@ struct HorizontalRailView: View {
             let available = geometry.size.height - inset
             ZStack(alignment: top ? .top : .bottom) {
                 if state.isExpanded, let attachment = state.attachment {
+                    let cardWidth = RailMetrics.attachmentWidth - RailMetrics.pointerDepth
+                    // Only a provider's card points at its ring. The centre is measured along
+                    // the card's rail-side edge, which is what `AttachmentSilhouette` expects.
+                    let pointerCenter: CGFloat? = {
+                        if case .detail(let provider) = attachment {
+                            return cardWidth / 2 + pointerOffset(provider, railLength: railLength, scale: scale)
+                        }
+                        return nil
+                    }()
+
+                    // One silhouette and one surface for the card and its pointer, as on the
+                    // side edges — see `AttachmentColumn.card(for:)`.
                     ScrollView {
                         attachmentContent(attachment)
                             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
@@ -31,20 +43,19 @@ struct HorizontalRailView: View {
                             }
                     }
                     .scrollBounceBehavior(.basedOnSize)
-                    .frame(width: RailMetrics.attachmentWidth - RailMetrics.pointerDepth,
+                    .frame(width: cardWidth,
                            height: min(state.attachmentHeight, max(0, available - depth - HorizontalRailMetrics.cardGap)))
-                    .overlay(alignment: top ? .top : .bottom) {
-                        if case .detail(let provider) = attachment {
-                            CardPointerView(edge: .right)
-                                .frame(width: RailMetrics.pointerDepth, height: 26)
-                                .rotationEffect(.degrees(top ? -90 : 90))
-                                .frame(width: 26, height: RailMetrics.pointerDepth)
-                                .offset(x: pointerOffset(provider, railLength: railLength, scale: scale),
-                                        y: top ? -RailMetrics.pointerDepth : RailMetrics.pointerDepth)
-                        }
-                    }
-                    .padding(top ? .top : .bottom, depth + HorizontalRailMetrics.cardGap)
+                    .clipShape(RoundedRectangle(cornerRadius: RailMetrics.cardCornerRadius, style: .continuous))
                     .onHover(perform: actions.attachmentHover)
+                    .padding(top ? .top : .bottom, RailMetrics.pointerDepth)
+                    .modifier(RailGlass.Surface(
+                        shape: AttachmentSilhouette(edge: top ? .top : .bottom, pointerCenter: pointerCenter),
+                        glassOpacity: store.glassOpacity,
+                        tint: RailGlass.cardTint(opacity: store.glassOpacity),
+                        interactive: false,
+                        enabled: store.glassEnabled
+                    ))
+                    .padding(top ? .top : .bottom, depth + RailMetrics.attachmentGap)
                 }
 
                 // Rotating the actual side rail keeps its shoulders, end hook, settings orb,
@@ -52,11 +63,21 @@ struct HorizontalRailView: View {
                 // Only the meter contents and gear icon rotate back to stay readable.
                 EdgeRailView(state: state, providers: store.railProviders, actions: actions,
                              renderingEdge: top ? .right : .left, contentRotation: 90,
-                             hidesCollapsedPill: top && state.joinedNotch != nil)
+                             hidesCollapsedPill: top && state.joinedNotch != nil,
+                             showsResizeGrip: false)
                     .frame(width: depth, height: railLength,
                            alignment: top ? .trailing : .leading)
                     .rotationEffect(.degrees(-90))
                     .frame(width: railLength, height: depth)
+                    // The grip, outside the rotation — see `EdgeRailView.showsResizeGrip`.
+                    // In the middle of the inner edge, which is the middle of the body too:
+                    // the shoulder and the foot are the same length.
+                    .overlay(alignment: top ? .bottom : .top) {
+                        if state.isExpanded {
+                            RailResizeHandle(actions: actions)
+                                .frame(width: RailMetrics.resizeGripLength, height: RailMetrics.resizeGripWidth)
+                        }
+                    }
             }
             .frame(width: geometry.size.width, height: max(0, available), alignment: top ? .top : .bottom)
             // The inset band above holds the menu bar and the hardware notch; nothing is drawn in it.

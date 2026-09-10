@@ -24,6 +24,24 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.11",
+            headline: "Liquid Glass, for real.",
+            changes: [
+                .init("The rail is made of the system's Liquid Glass",
+                      "On macOS 26 the rail, its cards, the gear, and the folded pill use the real material: the desktop refracts through them and the rim catches the light. Older Macs keep the frosted look."),
+                .init("Cards and their pointer are one piece",
+                      "The detail card's pointer is part of the same glass, with no seam where they meet."),
+                .init("Buttons that look like buttons",
+                      "The card buttons are glass, at full strength, the same size in every card, and a bright arc sweeps their rim under the pointer. Long provider names no longer get squeezed."),
+                .init("Show and Edge are glass segmented controls",
+                      "Full width, matching the buttons, with a selection that slides."),
+                .init("The rail's top curve matches its bottom",
+                      "The shoulder now rolls off the screen edge the way the foot does."),
+                .init("Resizing the rail",
+                      "The resize mark in the middle of the rail's inner edge shows the resize cursor and works on the top and bottom edges too.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.10",
             headline: "Every message in your language.",
             changes: [
