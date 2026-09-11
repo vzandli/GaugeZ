@@ -3437,6 +3437,143 @@
         }
       }
     },
+    "%lld unused rate-limit resets" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld إعادة تعيين غير مستخدمة لحد المعدل"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lldটি অব্যবহৃত রেট-লিমিট রিসেট"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld neiskorištenih resetiranja ograničenja"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ungenutzte Limit-Resets"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld unused rate-limit resets"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld reinicios de límite sin usar"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld hindi nagamit na rate-limit reset"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld réinitialisations de limite inutilisées"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld अप्रयुक्त रेट-लिमिट रीसेट"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld reset del limite non usati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未使用のレート制限リセット %lld 回"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미사용 속도 제한 초기화 %lld회"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld न वापरलेले रेट-लिमिट रीसेट"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld resets de limite não usados"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неиспользованных сбросов лимита: %lld"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld பயன்படுத்தப்படாத வரம்பு மீட்டமைப்புகள்"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ఉపయోగించని రేట్-లిమిట్ రీసెట్‌లు"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld kullanılmamış sınır sıfırlaması"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld غیر استعمال شدہ ریٹ لمٹ ری سیٹ"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld lần đặt lại giới hạn chưa dùng"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 次未使用的限額重設"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 次未使用的限额重置"
+          }
+        }
+      }
+    },
     "%lld%%" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4112,6 +4249,143 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld/%2$lld"
+          }
+        }
+      }
+    },
+    "1 unused rate-limit reset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إعادة تعيين واحدة غير مستخدمة لحد المعدل"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1টি অব্যবহৃত রেট-লিমিট রিসেট"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 neiskorišteno resetiranje ograničenja"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 ungenutzter Limit-Reset"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 unused rate-limit reset"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 reinicio de límite sin usar"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 hindi nagamit na rate-limit reset"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 réinitialisation de limite inutilisée"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 अप्रयुक्त रेट-लिमिट रीसेट"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 reset del limite non usato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未使用のレート制限リセット 1 回"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미사용 속도 제한 초기화 1회"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 न वापरलेले रेट-लिमिट रीसेट"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 reset de limite não usado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 неиспользованный сброс лимита"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 பயன்படுத்தப்படாத வரம்பு மீட்டமைப்பு"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 ఉపయోగించని రేట్-లిమిట్ రీసెట్"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 kullanılmamış sınır sıfırlaması"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 غیر استعمال شدہ ریٹ لمٹ ری سیٹ"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 lần đặt lại giới hạn chưa dùng"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 次未使用的限額重設"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 次未使用的限额重置"
           }
         }
       }
@@ -10692,6 +10966,143 @@
         }
       }
     },
+    "Claude Code cleared this sign-in. The last reading is kept until you sign in again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مسح Claude Code تسجيل الدخول هذا. تُحفظ آخر قراءة حتى تسجّل الدخول مجددًا."
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code এই সাইন-ইন মুছে দিয়েছে। আবার সাইন ইন না করা পর্যন্ত শেষ রিডিং রাখা হয়েছে।"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code je obrisao ovu prijavu. Posljednje očitanje se čuva dok se ponovo ne prijavite."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code hat diese Anmeldung gelöscht. Der letzte Messwert bleibt erhalten, bis Sie sich erneut anmelden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code cleared this sign-in. The last reading is kept until you sign in again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code borró este inicio de sesión. La última lectura se conserva hasta que vuelvas a iniciar sesión."
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Binura ng Claude Code ang sign-in na ito. Pinananatili ang huling reading hanggang mag-sign in ka ulit."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code a effacé cette connexion. La dernière lecture est conservée jusqu’à votre reconnexion."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code ने यह साइन-इन हटा दिया। दोबारा साइन इन करने तक आखिरी रीडिंग रखी गई है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code ha cancellato questo accesso. L’ultima lettura resta finché non accedi di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Codeがこのサインインを消去しました。再度サインインするまで最後の値を保持します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code가 이 로그인을 지웠습니다. 다시 로그인할 때까지 마지막 값을 유지합니다."
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code ने हे साइन-इन पुसले. पुन्हा साइन इन करेपर्यंत शेवटचे रीडिंग ठेवले आहे."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Claude Code apagou este login. A última leitura fica guardada até você entrar de novo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code удалил этот вход. Последние показания сохраняются, пока вы не войдёте снова."
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code இந்த உள்நுழைவை அழித்தது. மீண்டும் உள்நுழையும் வரை கடைசி அளவீடு வைக்கப்படும்."
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code ఈ సైన్-ఇన్‌ను తొలగించింది. మళ్లీ సైన్ ఇన్ చేసే వరకు చివరి రీడింగ్ ఉంచబడుతుంది."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code bu girişi sildi. Yeniden giriş yapana kadar son okuma korunur."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code نے یہ سائن ان مٹا دیا۔ دوبارہ سائن ان کرنے تک آخری ریڈنگ محفوظ رہے گی۔"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code đã xóa đăng nhập này. Số liệu gần nhất được giữ cho đến khi bạn đăng nhập lại."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code 已清除此登入。最後讀數會保留至你再次登入。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code 已清除此登录。最后读数会保留到你再次登录。"
+          }
+        }
+      }
+    },
     "Claude Desktop has not recorded usage yet. Open Claude and sign in, or switch the Claude source to the Claude Code CLI." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12195,6 +12606,280 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude 用量日志格式不受支持。"
+          }
+        }
+      }
+    },
+    "Claude/GPT 5-hour limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT حد ٥ ساعات"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5 ঘণ্টার সীমা"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Ograničenje od 5 sati"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5-Stunden-Limit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5-hour limit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Límite de 5 horas"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5-oras na limitasyon"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Limite de 5 heures"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5-घंटे की सीमा"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Limite di 5 ore"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5時間制限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5시간 한도"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5 तासांची मर्यादा"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Limite de 5 horas"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Лимит на 5 часов"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5-மணிநேர வரம்பு"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5-గంటల పరిమితి"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5 saatlik sınır"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5 گھنٹے کی حد"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Giới hạn 5 giờ"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5 小時上限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 5 小时上限"
+          }
+        }
+      }
+    },
+    "Claude/GPT weekly limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT الحد الأسبوعي"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT সাপ্তাহিক সীমা"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Sedmično ograničenje"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Wöchentliches Limit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT weekly limit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Límite semanal"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Lingguhang limitasyon"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Limite hebdomadaire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT साप्ताहिक सीमा"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Limite settimanale"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 週間上限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 주간 한도"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT साप्ताहिक मर्यादा"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Limite semanal"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Недельный лимит"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT வாராந்திர வரம்பு"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT వారపు పరిమితి"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Haftalık sınır"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT ہفتہ وار حد"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT Giới hạn hàng tuần"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 每週上限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude/GPT 周度上限"
           }
         }
       }
@@ -20961,6 +21646,280 @@
         }
       }
     },
+    "Gemini 5-hour limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini حد ٥ ساعات"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5 ঘণ্টার সীমা"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Ograničenje od 5 sati"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5-Stunden-Limit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5-hour limit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Límite de 5 horas"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5-oras na limitasyon"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Limite de 5 heures"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5-घंटे की सीमा"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Limite di 5 ore"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5時間制限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5시간 한도"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5 तासांची मर्यादा"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Limite de 5 horas"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Лимит на 5 часов"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5-மணிநேர வரம்பு"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5-గంటల పరిమితి"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5 saatlik sınır"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5 گھنٹے کی حد"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Giới hạn 5 giờ"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5 小時上限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 5 小时上限"
+          }
+        }
+      }
+    },
+    "Gemini weekly limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini الحد الأسبوعي"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini সাপ্তাহিক সীমা"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Sedmično ograničenje"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Wöchentliches Limit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini weekly limit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Límite semanal"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Lingguhang limitasyon"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Limite hebdomadaire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini साप्ताहिक सीमा"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Limite settimanale"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 週間上限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 주간 한도"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini साप्ताहिक मर्यादा"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Limite semanal"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Недельный лимит"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini வாராந்திர வரம்பு"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini వారపు పరిమితి"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Haftalık sınır"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini ہفتہ وار حد"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini Giới hạn hàng tuần"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 每週上限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gemini 周度上限"
+          }
+        }
+      }
+    },
     "General" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -27533,6 +28492,143 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "均不显示"
+          }
+        }
+      }
+    },
+    "Next expires %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التالية تنتهي %@"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "পরেরটির মেয়াদ শেষ %@"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sljedeće ističe %@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nächster läuft ab: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next expires %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El próximo caduca %@"
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Susunod na mag-e-expire %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La prochaine expire %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अगला समाप्त होगा %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il prossimo scade %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次の期限: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음 만료: %@"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पुढील संपते %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O próximo expira %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Следующий истекает %@"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "அடுத்தது காலாவதி %@"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "తదుపరిది గడువు ముగుస్తుంది %@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonraki sona erme: %@"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اگلا ختم ہوگا %@"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lần tiếp theo hết hạn %@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一次到期：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一次到期：%@"
           }
         }
       }
@@ -36031,6 +37127,143 @@
         }
       }
     },
+    "Reads the Codex CLI sign-in in ~/.codex-%@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يقرأ تسجيل دخول واجهة سطر أوامر Codex في ~/.codex-%@."
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ এ থাকা Codex CLI সাইন-ইন পড়ে।"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Čita Codex CLI prijavu u ~/.codex-%@."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liest die Codex-CLI-Anmeldung in ~/.codex-%@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reads the Codex CLI sign-in in ~/.codex-%@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lee el inicio de sesión de la CLI de Codex en ~/.codex-%@."
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Binabasa ang pag-sign in sa Codex CLI sa ~/.codex-%@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lit la connexion du CLI Codex dans ~/.codex-%@."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ में Codex CLI साइन-इन पढ़ता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legge l’accesso della CLI Codex in ~/.codex-%@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@にあるCodex CLIのサインイン情報を読み取ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@의 Codex CLI 로그인을 읽습니다."
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ मधील Codex CLI साइन-इन वाचते."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lê o login do codex CLI em ~/.codex-%@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Считывает вход codex CLI в каталоге ~/.codex-%@."
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ இல் உள்ள Codex CLI உள்நுழைவைப் படிக்கிறது."
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ లోని Codex CLI సైన్-ఇన్‌ను చదువుతుంది."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ içindeki Codex CLI girişini okur."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~/.codex-%@ میں Codex CLI سائن ان پڑھتا ہے۔"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đọc đăng nhập Codex CLI trong ~/.codex-%@."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取 ~/.codex-%@ 中的 Codex CLI 登入資訊。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取 ~/.codex-%@ 中的 Codex CLI 登录凭据。"
+          }
+        }
+      }
+    },
     "Reads the local Antigravity server, then Google quota with the saved sign-in, or derives model turns from local transcripts." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -41781,6 +43014,143 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示最近已知的数据。刷新以更新。"
+          }
+        }
+      }
+    },
+    "Sign in with CODEX_HOME pointing to ~/.codex-%@, then retry." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "سجّل الدخول مع توجيه CODEX_HOME إلى ~/.codex-%@، ثم أعد المحاولة."
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME কে ~/.codex-%@ এ নির্দেশ করে সাইন ইন করুন, তারপর আবার চেষ্টা করুন।"
+          }
+        },
+        "bs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prijavite se s CODEX_HOME usmjerenim na ~/.codex-%@, zatim pokušajte ponovo."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Melden Sie sich mit CODEX_HOME auf ~/.codex-%@ an und versuchen Sie es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in with CODEX_HOME pointing to ~/.codex-%@, then retry."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión con CODEX_HOME apuntando a ~/.codex-%@ y reintenta."
+          }
+        },
+        "fil" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mag-sign in na nakaturo ang CODEX_HOME sa ~/.codex-%@, pagkatapos ay subukan ulit."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous avec CODEX_HOME pointant vers ~/.codex-%@, puis réessayez."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME को ~/.codex-%@ पर सेट करके साइन इन करें, फिर पुनः प्रयास करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accedi con CODEX_HOME che punta a ~/.codex-%@, poi riprova."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOMEを~/.codex-%@に設定してサインインし、再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME을 ~/.codex-%@로 지정해 로그인한 뒤 다시 시도하십시오."
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME ~/.codex-%@ कडे निर्देशित करून साइन इन करा, नंतर पुन्हा प्रयत्न करा."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faça login com CODEX_HOME apontando para ~/.codex-%@ e tente de novo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войдите, указав в CODEX_HOME каталог ~/.codex-%@, затем повторите."
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME ஐ ~/.codex-%@ க்கு அமைத்து உள்நுழைந்து, பின்னர் மீண்டும் முயற்சிக்கவும்."
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME ను ~/.codex-%@ కు సెట్ చేసి సైన్ ఇన్ చేయండి, ఆపై మళ్లీ ప్రయత్నించండి."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME'u ~/.codex-%@ olarak ayarlayıp giriş yapın, sonra yeniden deneyin."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CODEX_HOME کو ~/.codex-%@ پر سیٹ کر کے سائن ان کریں، پھر دوبارہ کوشش کریں۔"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đăng nhập với CODEX_HOME trỏ tới ~/.codex-%@, rồi thử lại."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將 CODEX_HOME 指向 ~/.codex-%@ 後登入，然後重試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将 CODEX_HOME 指向 ~/.codex-%@ 后登录，然后重试。"
           }
         }
       }

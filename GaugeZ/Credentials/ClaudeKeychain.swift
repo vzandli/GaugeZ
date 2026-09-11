@@ -7,16 +7,39 @@ enum ClaudeKeychain {
     /// nothing about the account or the grant, so it must never read as a refusal. Security exports
     /// no named constant for it.
     static let darkWakeStatus: OSStatus = -25320
+    /// `errAuthorizationInternal` (-60008): macOS wanted a prompt and had no way to show one.
+    static let authorizationInternalStatus: OSStatus = -60008
 
     /// A read that failed for a reason unrelated to the grant is transient; everything else is a
     /// refusal that automatic polling must not repeat.
     static func failure(for status: OSStatus) -> ClaudeProviderError {
-        status == darkWakeStatus ? .keychainUnavailable(status) : .keychainDenied(status)
+        wasTransient(status) ? .keychainUnavailable(status) : .keychainDenied(status)
+    }
+
+    static func wasTransient(_ status: OSStatus) -> Bool {
+        status == darkWakeStatus || status == authorizationInternalStatus
+    }
+
+    /// The item exists and this app was not let in. Distinct from "not found".
+    static func wasRefused(_ status: OSStatus) -> Bool {
+        status == errSecAuthFailed
+            || status == errSecUserCanceled
+            || status == errSecInteractionNotAllowed
+            || status == errSecInteractionRequired
     }
 
     struct Match: Equatable, Sendable {
         let modifiedAt: Date?
         let persistentRef: Data
+        let service: String
+        let account: String?
+
+        init(modifiedAt: Date?, persistentRef: Data, service: String = "", account: String? = nil) {
+            self.modifiedAt = modifiedAt
+            self.persistentRef = persistentRef
+            self.service = service
+            self.account = account
+        }
     }
 
     static func newest(service: String, account: String? = nil) throws -> Match? {
@@ -25,7 +48,8 @@ enum ClaudeKeychain {
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
             kSecReturnPersistentRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
         if let account { query[kSecAttrAccount as String] = account }
         var result: CFTypeRef?
@@ -35,7 +59,12 @@ enum ClaudeKeychain {
         let items = result as? [[String: Any]] ?? (result as? [String: Any]).map { [$0] } ?? []
         return newest(in: items.compactMap { item in
             guard let ref = item[kSecValuePersistentRef as String] as? Data else { return nil }
-            return Match(modifiedAt: item[kSecAttrModificationDate as String] as? Date, persistentRef: ref)
+            return Match(
+                modifiedAt: item[kSecAttrModificationDate as String] as? Date,
+                persistentRef: ref,
+                service: item[kSecAttrService as String] as? String ?? service,
+                account: item[kSecAttrAccount as String] as? String ?? account
+            )
         })
     }
 
@@ -47,17 +76,23 @@ enum ClaudeKeychain {
         }
     }
 
-    static func read(_ match: Match) throws -> Data {
-        let query: [String: Any] = [
-            kSecValuePersistentRef as String: match.persistentRef,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+    static func read(_ match: Match, interactive: Bool? = nil) throws -> Data {
+        let allowed = interactive ?? KeychainAccess.consumeInteractive()
+        let rescue: (service: String, account: String?)? = match.service.isEmpty
+            ? nil : (match.service, match.account)
+        let (status, data) = KeychainSecret.read(
+            query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecValuePersistentRef as String: match.persistentRef,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ],
+            interactive: allowed,
+            rescue: rescue
+        )
         if status == errSecItemNotFound { throw ClaudeProviderError.notSignedIn }
         guard status == errSecSuccess else { throw failure(for: status) }
-        guard let data = result as? Data, !data.isEmpty else { throw ClaudeProviderError.malformedCredential }
+        guard let data, !data.isEmpty else { throw ClaudeProviderError.malformedCredential }
         return data
     }
 }

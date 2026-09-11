@@ -29,10 +29,14 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
             let slug = String(rawValue.dropFirst(7))
             guard !slug.isEmpty, !slug.contains("/"), !slug.contains("\u{0}") else { return nil }
             self.init(kind: .claude, profileSlug: slug)
+        } else if rawValue.hasPrefix("codex-") {
+            let slug = String(rawValue.dropFirst(6))
+            guard !slug.isEmpty, !slug.contains("/"), !slug.contains("\u{0}") else { return nil }
+            self.init(kind: .codex, profileSlug: slug)
         } else { return nil }
     }
 
-    var rawValue: String { profileSlug.map { "claude-\($0)" } ?? kind.rawValue }
+    var rawValue: String { profileSlug.map { "\(kind.rawValue)-\($0)" } ?? kind.rawValue }
     var id: String { rawValue }
     var supportsActivity: Bool {
         switch kind {
@@ -66,7 +70,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         switch kind {
         case .claude: profileSlug.map { "Claude (\($0))" } ?? "Claude"
         case .cursor: "Cursor"
-        case .codex: "Codex"
+        case .codex: profileSlug.map { "Codex (\($0))" } ?? "Codex"
         case .antigravity: "Antigravity"
         case .glm: "GLM"
         case .grok: "Grok Build"
@@ -124,7 +128,9 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
             profileSlug.map { String(localized: "Reads the Claude Code sign-in and sessions in ~/.claude-\($0).", bundle: .language) }
                 ?? String(localized: "Reads the Claude desktop usage log, or the default Claude Code CLI sign-in from Keychain.", bundle: .language)
         case .cursor: String(localized: "Uses Cursor's local sign-in to ask cursor.com for plan usage.", bundle: .language)
-        case .codex: String(localized: "Talks to the local app-server bundled with Codex, ChatGPT, or the codex CLI; without one, reads ChatGPT's usage endpoint with the CLI sign-in.", bundle: .language)
+        case .codex:
+            profileSlug.map { String(localized: "Reads the Codex CLI sign-in in ~/.codex-\($0).", bundle: .language) }
+                ?? String(localized: "Talks to the local app-server bundled with Codex, ChatGPT, or the codex CLI; without one, reads ChatGPT's usage endpoint with the CLI sign-in.", bundle: .language)
         case .antigravity: String(localized: "Reads the local Antigravity server, then Google quota with the saved sign-in, or derives model turns from local transcripts.", bundle: .language)
         case .glm: String(localized: "Reads Z.ai Coding Plan usage with a key held by Claude Code, ZCode, or OpenCode.", bundle: .language)
         case .grok: String(localized: "Reads Grok Build’s xAI account sign-in from ~/.grok/auth.json and asks its billing service for the allowance.", bundle: .language)
@@ -231,6 +237,27 @@ struct UsageWindow: Identifiable, Equatable, Sendable, Codable {
     var remainingPercent: Double {
         max(0, min(100, 100 - usedPercent))
     }
+
+    var isExhausted: Bool { remainingPercent <= 0 }
+}
+
+/// Unused Codex rate-limit resets listed by ChatGPT under the same credential as usage.
+struct CodexResetCredits: Equatable, Sendable, Codable {
+    struct Credit: Equatable, Sendable, Identifiable, Codable {
+        let id: String
+        let status: String
+        let expiresAt: Date?
+    }
+
+    let availableCount: Int
+    let credits: [Credit]
+
+    var available: [Credit] {
+        credits.filter { $0.status == "available" }
+            .sorted { ($0.expiresAt ?? .distantFuture) < ($1.expiresAt ?? .distantFuture) }
+    }
+
+    var nextExpiry: Date? { available.compactMap(\.expiresAt).min() }
 }
 
 struct ProviderCostInfo: Codable, Equatable, Sendable {
@@ -315,6 +342,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
     let health: ProviderHealth
     let costInfo: ProviderCostInfo?
     let derivedRequestCount: Int?
+    let resetCredits: CodexResetCredits?
 
     var headlineWindowID: String? = nil
 
@@ -322,10 +350,17 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
         if let headlineWindowID {
             return windows.first { $0.id == headlineWindowID }
         }
-        return windows.min { $0.remainingPercent < $1.remainingPercent }
+        return Self.automaticHeadline(in: windows)
     }
 
     var remainingPercent: Double? { headlineWindow?.remainingPercent }
+
+    /// An exhausted window does not displace a usable one unless every window is exhausted.
+    static func automaticHeadline(in windows: [UsageWindow]) -> UsageWindow? {
+        let usable = windows.filter { !$0.isExhausted }
+        let pool = usable.isEmpty ? windows : usable
+        return pool.min { $0.remainingPercent < $1.remainingPercent }
+    }
 
     init(
         provider: ProviderID,
@@ -337,7 +372,8 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
         health: ProviderHealth,
         costInfo: ProviderCostInfo? = nil,
         headlineWindowID: String? = nil,
-        derivedRequestCount: Int? = nil
+        derivedRequestCount: Int? = nil,
+        resetCredits: CodexResetCredits? = nil
     ) {
         self.provider = provider
         self.accountID = accountID
@@ -349,6 +385,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
         self.derivedRequestCount = derivedRequestCount
         self.costInfo = costInfo
         self.headlineWindowID = headlineWindowID
+        self.resetCredits = resetCredits
     }
 
     static func placeholder(
@@ -379,7 +416,24 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
             health: health,
             costInfo: costInfo,
             headlineWindowID: headlineWindowID,
-            derivedRequestCount: derivedRequestCount
+            derivedRequestCount: derivedRequestCount,
+            resetCredits: resetCredits
+        )
+    }
+
+    func withResetCredits(_ credits: CodexResetCredits?) -> UsageSnapshot {
+        UsageSnapshot(
+            provider: provider,
+            accountID: accountID,
+            planName: planName,
+            windows: windows,
+            observedAt: observedAt,
+            source: source,
+            health: health,
+            costInfo: costInfo,
+            headlineWindowID: headlineWindowID,
+            derivedRequestCount: derivedRequestCount,
+            resetCredits: credits
         )
     }
 }

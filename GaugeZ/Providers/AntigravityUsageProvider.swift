@@ -293,78 +293,282 @@ enum AntigravityQuotaParser {
         let plan: String?
     }
 
-    /// `RetrieveUserQuotaSummary`: groups of models, each with session and weekly buckets.
-    static func windows(fromQuotaSummary data: Data) throws -> [UsageWindow] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    /// Same parser for the local language server and Google's quota endpoint, so window IDs
+    /// do not change depending on which answered.
+    static func windows(fromQuotaSummary data: Data, now: Date = .now) throws -> [UsageWindow] {
+        try windows(from: data, now: now)
+    }
+
+    static func remoteWindows(from data: Data, now: Date = .now) throws -> [UsageWindow] {
+        try windows(from: data, now: now)
+    }
+
+    static func windows(from data: Data, now: Date = .now) throws -> [UsageWindow] {
+        guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
             throw AntigravityProviderError.malformedResponse
         }
-        let payload = (root["response"] as? [String: Any]) ?? (root["summary"] as? [String: Any]) ?? root
-        guard let groups = payload["groups"] as? [[String: Any]] else {
-            throw AntigravityProviderError.malformedResponse
+        let groups = response.response?.groups
+            ?? response.summary?.groups
+            ?? response.groups
+            ?? response.quotaGroups
+            ?? []
+        let parsed: [UsageWindow]
+        if !groups.isEmpty {
+            parsed = groupedWindows(groups)
+        } else if let buckets = response.buckets, !buckets.isEmpty {
+            parsed = buckets.contains(where: { $0.limit != nil })
+                ? legacyWindows(buckets) : modelWindows(buckets, now: now)
+        } else {
+            parsed = []
+        }
+        guard !parsed.isEmpty else { throw AntigravityProviderError.noQuotaBuckets }
+        return parsed
+    }
+
+    private struct Remaining: Decodable {
+        let fraction: Double?
+
+        private enum CodingKeys: String, CodingKey {
+            case remainingFraction
+            case oneofCase = "case"
+            case value
         }
 
-        var windows: [UsageWindow] = []
-        for group in groups {
-            let groupName = shortGroupName((group["displayName"] as? String) ?? "")
-            for bucket in group["buckets"] as? [[String: Any]] ?? [] {
-                guard let bucketID = bucket["bucketId"] as? String, !bucketID.isEmpty else { continue }
-                if (bucket["disabled"] as? Bool) == true { continue }
-                guard let fraction = remainingFraction(in: bucket) else { continue }
-                guard fraction.isFinite, fraction >= -0.005, fraction <= 1.005 else {
-                    throw AntigravityProviderError.invalidValue(bucketID)
-                }
-
-                let cadence = cadence(bucketID: bucketID, displayName: bucket["displayName"] as? String ?? "")
-                windows.append(UsageWindow(
-                    id: "antigravity-\(bucketID)",
-                    label: "\(groupName) \(cadence.label)".trimmingCharacters(in: .whitespaces),
-                    usedPercent: (1 - min(1, max(0, fraction))) * 100,
-                    resetsAt: (bucket["resetTime"] as? String).flatMap(parseDate),
-                    durationMinutes: cadence.minutes
-                ))
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let fraction = try container.decodeIfPresent(Double.self, forKey: .remainingFraction) {
+                self.fraction = fraction
+            } else if try container.decodeIfPresent(String.self, forKey: .oneofCase) == "remainingFraction" {
+                self.fraction = try container.decodeIfPresent(Double.self, forKey: .value)
+            } else {
+                self.fraction = nil
             }
-        }
-        guard !windows.isEmpty else { throw AntigravityProviderError.noQuotaBuckets }
-        return windows.sorted { lhs, rhs in
-            (lhs.durationMinutes ?? .max, lhs.label) < (rhs.durationMinutes ?? .max, rhs.label)
         }
     }
 
-    /// The direct endpoint has shipped both local-style groups and flat usage/limit buckets.
-    static func remoteWindows(from data: Data) throws -> [UsageWindow] {
-        if let local = try? windows(fromQuotaSummary: data) { return local }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AntigravityProviderError.malformedResponse
+    private struct Bucket: Decodable {
+        let modelId: String?
+        let bucketId: String?
+        let name: String?
+        let displayName: String?
+        let remainingFraction: Double?
+        let remaining: Remaining?
+        let used: Double?
+        let limit: Double?
+        let resetTime: String?
+        let window: String?
+        let disabled: Bool?
+
+        var fraction: Double? { remainingFraction ?? remaining?.fraction }
+    }
+
+    private struct Group: Decodable {
+        let displayName: String?
+        let buckets: [Bucket]?
+    }
+
+    private struct GroupBody: Decodable {
+        let groups: [Group]?
+    }
+
+    private struct Response: Decodable {
+        let buckets: [Bucket]?
+        let groups: [Group]?
+        let quotaGroups: [Group]?
+        let response: GroupBody?
+        let summary: GroupBody?
+    }
+
+    private struct Candidate {
+        let remaining: Double
+        let resetDate: Date?
+        let isWeekly: Bool
+    }
+
+    private static func groupedWindows(_ groups: [Group]) -> [UsageWindow] {
+        let sortedGroups = groups.enumerated().sorted { lhs, rhs in
+            let lhsRank = groupRank(lhs.element.displayName)
+            let rhsRank = groupRank(rhs.element.displayName)
+            return lhsRank == rhsRank ? lhs.offset < rhs.offset : lhsRank < rhsRank
         }
-        let groups = root["quotaGroups"] as? [[String: Any]] ?? []
-        let buckets = (root["buckets"] as? [[String: Any]] ?? []) + groups.flatMap { $0["buckets"] as? [[String: Any]] ?? [] }
-        var seen: Set<String> = []
-        let windows = buckets.compactMap { bucket -> UsageWindow? in
-            guard bucket["disabled"] as? Bool != true,
-                  let name = bucket["name"] as? String ?? bucket["bucketId"] as? String ?? bucket["modelId"] as? String ?? bucket["displayName"] as? String,
-                  !name.isEmpty, !name.lowercased().hasPrefix("chat_") else { return nil }
-            let usedPercent: Double
-            if let fraction = bucket["remainingFraction"] as? NSNumber,
-               CFGetTypeID(fraction) != CFBooleanGetTypeID() {
-                let value = fraction.doubleValue
-                guard value.isFinite, (0...1).contains(value) else { return nil }
-                usedPercent = (1 - value) * 100
-            } else {
-                guard let limit = bucket["limit"] as? NSNumber, CFGetTypeID(limit) != CFBooleanGetTypeID(),
-                      let used = bucket["used"] as? NSNumber, CFGetTypeID(used) != CFBooleanGetTypeID(),
-                      limit.doubleValue.isFinite, limit.doubleValue > 0, used.doubleValue.isFinite,
-                      used.doubleValue >= 0, used.doubleValue <= limit.doubleValue * 1.5 else { return nil }
-                usedPercent = min(100, used.doubleValue / limit.doubleValue * 100)
-            }
-            let model = bucket["modelId"] as? String ?? ""
-            let id = model.isEmpty || model == name ? name : model + "-" + name
-            guard seen.insert(id).inserted else { return nil }
-            return UsageWindow(id: "antigravity-" + id, label: bucket["displayName"] as? String ?? id,
-                               usedPercent: usedPercent,
-                               resetsAt: (bucket["resetTime"] as? String).flatMap(parseDate), durationMinutes: nil)
+        var windows: [UsageWindow] = []
+        for indexedGroup in sortedGroups {
+            windows.append(contentsOf: bucketWindows(in: indexedGroup.element))
         }
-        guard !windows.isEmpty else { throw AntigravityProviderError.noQuotaBuckets }
         return windows
+    }
+
+    private static func bucketWindows(in group: Group) -> [UsageWindow] {
+        let sortedBuckets = (group.buckets ?? []).enumerated().sorted { lhs, rhs in
+            let lhsRank = cadenceRank(lhs.element)
+            let rhsRank = cadenceRank(rhs.element)
+            return lhsRank == rhsRank ? lhs.offset < rhs.offset : lhsRank < rhsRank
+        }
+        return sortedBuckets.compactMap { indexedBucket in
+            window(from: indexedBucket.element, group: group.displayName)
+        }
+    }
+
+    private static func legacyWindows(_ buckets: [Bucket]) -> [UsageWindow] {
+        buckets.compactMap { window(from: $0, group: nil) }
+    }
+
+    private static func window(from bucket: Bucket, group: String?) -> UsageWindow? {
+        guard bucket.disabled != true else { return nil }
+        let rawID = id(for: bucket, group: group)
+        let reset = bucket.resetTime.flatMap(parseDate)
+        let minutes = durationMinutes(for: bucket)
+        let label = label(for: bucket, group: group)
+        if let remaining = bucket.fraction, (0...1).contains(remaining) {
+            return UsageWindow(
+                id: "antigravity-\(rawID)",
+                label: label,
+                usedPercent: (1 - remaining) * 100,
+                resetsAt: reset,
+                durationMinutes: minutes
+            )
+        }
+        guard let limit = bucket.limit, limit > 0,
+              let used = bucket.used, used >= 0, used <= limit * 1.5
+        else { return nil }
+        return UsageWindow(
+            id: "antigravity-\(rawID)",
+            label: label,
+            usedPercent: min(100, used / limit * 100),
+            resetsAt: reset,
+            durationMinutes: minutes
+        )
+    }
+
+    private static func modelWindows(_ buckets: [Bucket], now: Date) -> [UsageWindow] {
+        var geminiHourly: [Candidate] = []
+        var geminiWeekly: [Candidate] = []
+        var thirdPartyHourly: [Candidate] = []
+        var thirdPartyWeekly: [Candidate] = []
+
+        for bucket in buckets {
+            guard let remaining = bucket.fraction, (0...1).contains(remaining) else { continue }
+            let model = normalized(bucket.modelId ?? id(for: bucket, group: nil))
+            guard !model.isEmpty, !model.starts(with: "chat_") else { continue }
+            let resetDate = bucket.resetTime.flatMap(parseDate)
+            let resetIsWeekly = resetDate.map { $0.timeIntervalSince(now) > 24 * 3600 } ?? false
+            let isWeekly = cadenceRank(bucket) == 1 || resetIsWeekly
+            let candidate = Candidate(remaining: remaining, resetDate: resetDate, isWeekly: isWeekly)
+            if model.contains("gemini") {
+                if isWeekly { geminiWeekly.append(candidate) } else { geminiHourly.append(candidate) }
+            } else if model.contains("claude") || model.contains("gpt") || model.contains("openai") {
+                if isWeekly { thirdPartyWeekly.append(candidate) } else { thirdPartyHourly.append(candidate) }
+            }
+        }
+
+        var windows: [UsageWindow] = []
+        if let window = aggregate(geminiHourly, id: "gemini-hourly",
+                                  label: String(localized: "Gemini 5-hour limit", bundle: .language), weekly: false) {
+            windows.append(window)
+        }
+        if let window = aggregate(geminiWeekly, id: "gemini-weekly",
+                                  label: String(localized: "Gemini weekly limit", bundle: .language), weekly: true) {
+            windows.append(window)
+        }
+        if let window = aggregate(thirdPartyHourly, id: "3p-hourly",
+                                  label: String(localized: "Claude/GPT 5-hour limit", bundle: .language), weekly: false) {
+            windows.append(window)
+        }
+        if let window = aggregate(thirdPartyWeekly, id: "3p-weekly",
+                                  label: String(localized: "Claude/GPT weekly limit", bundle: .language), weekly: true) {
+            windows.append(window)
+        }
+        return windows
+    }
+
+    private static func aggregate(_ candidates: [Candidate], id: String, label: String, weekly: Bool) -> UsageWindow? {
+        guard let best = candidates.min(by: { $0.remaining < $1.remaining }) else { return nil }
+        return UsageWindow(
+            id: "antigravity-\(id)",
+            label: label,
+            usedPercent: (1 - best.remaining) * 100,
+            resetsAt: best.resetDate,
+            durationMinutes: weekly ? 10_080 : 300
+        )
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "-")
+    }
+
+    private static func groupRank(_ value: String?) -> Int {
+        let normalized = normalized(value ?? "")
+        if normalized.contains("gemini") { return 0 }
+        if normalized.contains("claude") || normalized.contains("gpt") { return 1 }
+        return 2
+    }
+
+    private static func cadenceRank(_ bucket: Bucket) -> Int {
+        if let value = cadenceValue(bucket.window), isWeeklyValue(value) { return 1 }
+        if let value = cadenceValue(bucket.bucketId), isWeeklyValue(value) { return 1 }
+        if let value = cadenceValue(bucket.displayName), isWeeklyValue(value) { return 1 }
+        if let value = cadenceValue(bucket.window), isSessionValue(value) { return 0 }
+        if let value = cadenceValue(bucket.bucketId), isSessionValue(value) { return 0 }
+        if let value = cadenceValue(bucket.displayName), isSessionValue(value) { return 0 }
+        return 2
+    }
+
+    private static func cadenceValue(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let value = normalized(raw)
+        guard !value.isEmpty else { return nil }
+        return value.hasSuffix(" limit") ? String(value.dropLast(" limit".count)) : value
+    }
+
+    private static func isWeeklyValue(_ value: String) -> Bool {
+        value == "weekly" || value.hasSuffix("-weekly") || value.hasSuffix(" weekly") || value.contains("week")
+    }
+
+    private static func isSessionValue(_ value: String) -> Bool {
+        value == "session" || value == "5h" || value == "5-hour" ||
+            value == "five hour" || value == "five-hour" || value == "hourly" ||
+            value.hasSuffix("-session") || value.hasSuffix("-5h") ||
+            value.hasSuffix("-5-hour") || value.hasSuffix("-five-hour") ||
+            value.hasSuffix("-hourly")
+    }
+
+    private static func durationMinutes(for bucket: Bucket) -> Int? {
+        switch cadenceRank(bucket) {
+        case 0: return 300
+        case 1: return 10_080
+        default: return nil
+        }
+    }
+
+    private static func label(for bucket: Bucket, group: String?) -> String {
+        let groupName = shortGroupName(group ?? "")
+        switch cadenceRank(bucket) {
+        case 0:
+            return groupName.isEmpty
+                ? String(localized: "5-hour limit", bundle: .language)
+                : "\(groupName) \(String(localized: "5-hour limit", bundle: .language))"
+        case 1:
+            return groupName.isEmpty
+                ? String(localized: "Weekly limit", bundle: .language)
+                : "\(groupName) \(String(localized: "Weekly limit", bundle: .language))"
+        default:
+            var value = bucket.displayName ?? id(for: bucket, group: group)
+            if value.hasSuffix(" Remaining") { value = String(value.dropLast(" Remaining".count)) }
+            if value == "Five Hour Limit" { value = String(localized: "5-hour limit", bundle: .language) }
+            return groupName.isEmpty ? value : "\(groupName) \(value)"
+        }
+    }
+
+    private static func id(for bucket: Bucket, group: String?) -> String {
+        [bucket.bucketId, bucket.modelId, bucket.name, group]
+            .compactMap { value in
+                guard let value else { return nil }
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .first ?? "quota"
     }
 
     /// `GetUserStatus`: account email and plan tier.
@@ -378,32 +582,11 @@ enum AntigravityQuotaParser {
         return Identity(email: status["email"] as? String, plan: plan.map { "Antigravity \($0)" })
     }
 
-    private static func remainingFraction(in bucket: [String: Any]) -> Double? {
-        if let direct = (bucket["remainingFraction"] as? NSNumber)?.doubleValue { return direct }
-        guard let remaining = bucket["remaining"] as? [String: Any] else { return nil }
-        if let value = (remaining["remainingFraction"] as? NSNumber)?.doubleValue { return value }
-        if remaining["case"] as? String == "remainingFraction" {
-            return (remaining["value"] as? NSNumber)?.doubleValue
-        }
-        return nil
-    }
-
     private static func shortGroupName(_ name: String) -> String {
         let lower = name.lowercased()
         if lower.contains("gemini") { return "Gemini" }
         if lower.contains("claude") || lower.contains("gpt") { return "Claude/GPT" }
         return name.trimmingCharacters(in: .whitespaces)
-    }
-
-    private static func cadence(bucketID: String, displayName: String) -> (label: String, minutes: Int?) {
-        let text = (bucketID + " " + displayName).lowercased().replacingOccurrences(of: "_", with: "-")
-        if ["5h", "5-hour", "five hour", "five-hour", "session"].contains(where: text.contains) {
-            return (String(localized: "5-hour limit", bundle: .language), 300)
-        }
-        if text.contains("weekly") || text.contains("week") {
-            return ("weekly limit", 10_080)
-        }
-        return (displayName.isEmpty ? bucketID : displayName, nil)
     }
 
     private static func parseDate(_ value: String) -> Date? {

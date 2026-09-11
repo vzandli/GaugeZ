@@ -24,6 +24,22 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.12",
+            headline: "No more Keychain nagging, and room for a second Codex account.",
+            changes: [
+                .init("Keychain stops asking",
+                      "Background refreshes never show the password dialogue. Only Retry can."),
+                .init("Signed out by an update? No blank ring",
+                      "If Claude Code clears your login, the last reading stays, dimmed."),
+                .init("Antigravity stops jumping",
+                      "The ring reads the same whichever source answered, and an empty limit no longer hides a healthy one."),
+                .init("See your unused Codex resets",
+                      "The detail card shows how many you have and when the next one expires."),
+                .init("More than one Codex account",
+                      "Each extra Codex home gets its own ring, like extra Claude profiles.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.11",
             headline: "Liquid Glass, for real.",
             changes: [

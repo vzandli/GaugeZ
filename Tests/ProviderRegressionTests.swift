@@ -29,6 +29,11 @@ struct ProviderRegressionTests {
         try profiles(root)
         try credentials()
         try keychainTransient()
+        try keychainPrompt()
+        try emptiedClaudeLogin(root)
+        try automaticHeadline()
+        try antigravityUnifiedParser()
+        try codexResetCredits()
         try claudeResponseShapes()
         try resetCopy()
         try glm(root)
@@ -153,7 +158,7 @@ struct ProviderRegressionTests {
         try expect(fromOMP.accessToken == "omp-fixture" && fromOMP.projectId == "fixture-project", "OMP WAL credentials are selected only for google-antigravity")
         let flat = #"{"buckets":[{"modelId":"gemini-test","bucketId":"daily","remainingFraction":0.25,"resetTime":"2027-01-01T00:00:00Z"},{"modelId":"claude-test","bucketId":"daily","remainingFraction":0.5}]}"#
         let windows = try AntigravityQuotaParser.remoteWindows(from: Data(flat.utf8))
-        try expect(windows.count == 2 && windows[0].remainingPercent == 25 && windows[0].resetsAt != nil, "Daily quota fractions retain distinct model buckets")
+        try expect(windows.count == 2 && windows[0].remainingPercent == 25 && windows[0].resetsAt != nil, "Daily quota fractions retain distinct model families")
         try rejects({ _ = try AntigravityQuotaParser.remoteWindows(from: Data(#"{"buckets":[{"modelId":"bad","remainingFraction":true}]}"#.utf8)) }, "Boolean cannot become free quota")
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FixtureProtocol.self]
@@ -313,6 +318,18 @@ struct ProviderRegressionTests {
         try expect(old == .claude, "Decode old cached provider IDs")
         try expect(ProviderID(rawValue: "claude-../bad") == nil, "Reject paths in profile IDs")
         try expect(ProviderID(rawValue: "claude-") == nil, "Reject empty profile slug")
+        for name in [".codex-work/auth.json", ".codex-client/sessions"] {
+            try fm.createDirectory(at: root.appendingPathComponent(name).deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try Data("{}".utf8).write(to: root.appendingPathComponent(".codex-work/auth.json"))
+        try fm.createDirectory(at: root.appendingPathComponent(".codex-client/sessions"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent(".codex-empty"), withIntermediateDirectories: true)
+        let codex = CodexProfile.discover(home: root, environment: [:])
+        try expect(codex.map(\.provider.rawValue) == ["codex", "codex-client", "codex-work"], "Discover only used Codex homes in stable order")
+        try expect(codex[2].authURL == root.appendingPathComponent(".codex-work/auth.json"), "Named Codex home keeps its own auth.json")
+        try expect(ProviderID(rawValue: "codex-work")?.displayName == "Codex (work)", "Named Codex ring label")
+        try expect(ProviderID(rawValue: "codex-../bad") == nil, "Reject paths in Codex profile IDs")
+        try expect(CodexProfile(home: root, environment: ["CODEX_HOME": root.path]).directory.standardizedFileURL.path == root.standardizedFileURL.path, "Default Codex home respects CODEX_HOME")
         let credential = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}}"#.utf8)
         try credential.write(to: profiles[2].credentialsFile)
         let loaded = try ClaudeCredentialReader.load(profile: profiles[2], match: nil)
@@ -381,6 +398,103 @@ struct ProviderRegressionTests {
         let credential = ClaudeCredential(accessToken: "fixture", expiresAt: nil, subscriptionType: nil, sourceDescription: "fixture")
         let loaded = try cache.value(stamp: stamp, now: now.addingTimeInterval(120)) { reads += 1; return credential }
         try expect(loaded.accessToken == "fixture" && reads == 3, "Recovers without a forget or a rotation")
+    }
+
+    static func keychainPrompt() throws {
+        let permission = PromptPermission()
+        try expect(!permission.take(), "Nothing is owed until somebody asks")
+        permission.grant()
+        try expect(permission.take(), "Asking owes exactly one read")
+        try expect(!permission.take(), "A second read spent the same click")
+        final class Clock: @unchecked Sendable { var now = Date(timeIntervalSince1970: 1_000) }
+        let clock = Clock()
+        let timed = PromptPermission(now: { clock.now })
+        timed.grant()
+        clock.now = clock.now.addingTimeInterval(PromptPermission.window + 1)
+        try expect(!timed.take(), "An unspent permission lapses")
+
+        var prompted = false
+        var rescuedService: String?
+        KeychainSecret.copyMatchingForTesting = { _, interactive in
+            prompted = interactive
+            return (errSecInteractionNotAllowed, nil)
+        }
+        KeychainSecret.rescueForTesting = { service, _ in
+            rescuedService = service
+            return Data("rescued".utf8)
+        }
+        defer {
+            KeychainSecret.copyMatchingForTesting = nil
+            KeychainSecret.rescueForTesting = nil
+        }
+        let match = ClaudeKeychain.Match(modifiedAt: nil, persistentRef: Data([1]),
+                                         service: "Claude Code-credentials", account: "fixture")
+        let data = try ClaudeKeychain.read(match, interactive: false)
+        try expect(!prompted && rescuedService == "Claude Code-credentials" && data == Data("rescued".utf8),
+                   "A refused background read is rescued through the security tool")
+        KeychainSecret.rescueForTesting = { _, _ in nil }
+        try rejects({ _ = try ClaudeKeychain.read(match, interactive: false) }, "A refused read without rescue stays a denial")
+    }
+
+    static func emptiedClaudeLogin(_ root: URL) throws {
+        let profile = ClaudeProfile(provider: ProviderID(rawValue: "claude-emptied")!, home: root)
+        try FileManager.default.createDirectory(at: profile.directory, withIntermediateDirectories: true)
+        try Data(#"{"claudeAiOauth":{"accessToken":"","expiresAt":0}}"#.utf8).write(to: profile.credentialsFile)
+        do {
+            _ = try ClaudeCredentialReader.load(profile: profile, match: nil)
+            throw Failure(description: "Expected emptied credential to throw")
+        } catch ClaudeProviderError.signedOutByOwner {
+            checks += 1
+        }
+        guard case .stale = ClaudeProviderError.signedOutByOwner.providerHealth else {
+            throw Failure(description: "An emptied Claude login keeps the last reading as stale")
+        }
+        checks += 1
+    }
+
+    static func automaticHeadline() throws {
+        let exhausted = UsageWindow(id: "session", label: "5-hour", usedPercent: 100, resetsAt: nil, durationMinutes: 300)
+        let weekly = UsageWindow(id: "weekly", label: "Weekly", usedPercent: 40, resetsAt: nil, durationMinutes: 10_080)
+        try expect(UsageSnapshot.automaticHeadline(in: [exhausted, weekly])?.id == "weekly",
+                   "An exhausted window does not headline while another has remaining")
+        let other = UsageWindow(id: "other", label: "Other", usedPercent: 100, resetsAt: nil, durationMinutes: nil)
+        try expect(UsageSnapshot.automaticHeadline(in: [exhausted, other])?.id == "session",
+                   "When every window is exhausted the tightest still leads")
+        let snapshot = UsageSnapshot(provider: .antigravity, accountID: nil, planName: nil,
+                                     windows: [exhausted, weekly], observedAt: .now, source: "fixture", health: .live)
+        try expect(snapshot.headlineWindow?.id == "weekly", "Automatic snapshot headline skips exhausted windows")
+        var selected = snapshot
+        selected.headlineWindowID = "session"
+        try expect(selected.headlineWindow?.id == "session", "An explicit headline is honoured even when exhausted")
+    }
+
+    static func antigravityUnifiedParser() throws {
+        let grouped = #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","displayName":"5-hour Limit","remainingFraction":0.4}]}]}"#
+        let local = try AntigravityQuotaParser.windows(fromQuotaSummary: Data(grouped.utf8))
+        let remote = try AntigravityQuotaParser.remoteWindows(from: Data(grouped.utf8))
+        try expect(local.map(\.id) == remote.map(\.id) && local.first?.id == "antigravity-gemini-5h",
+                   "Local and remote grouped payloads share window IDs")
+        try expect(abs((local.first?.remainingPercent ?? 0) - 40) < 0.0001, "Grouped remaining fraction")
+        let wrapped = #"{"response":{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","displayName":"5-hour Limit","remainingFraction":0.4}]}]}}"#
+        let fromResponse = try AntigravityQuotaParser.remoteWindows(from: Data(wrapped.utf8))
+        try expect(fromResponse.map(\.id) == local.map(\.id), "response.groups uses the same IDs as a bare groups payload")
+    }
+
+    static func codexResetCredits() throws {
+        let json = """
+        {"available_count":2,"credits":[
+          {"id":"credit-a","reset_type":"codex_rate_limits","status":"available",
+           "expires_at":"2026-07-12T01:33:14Z"},
+          {"id":"credit-b","status":"available","expires_at":"2026-07-18T08:00:00Z"}]}
+        """
+        let result = try CodexWebUsage.resetCredits(from: Data(json.utf8))
+        let firstExpiry = ISO8601DateFormatter().date(from: "2026-07-12T01:33:14Z")
+        try expect(result.availableCount == 2 && result.nextExpiry == firstExpiry,
+                   "Count and soonest expiry from the credits payload")
+        let truncated = try CodexWebUsage.resetCredits(from: Data(#"{"available_count":5,"credits":[{"status":"available","expires_at":"2026-07-12T01:33:14Z"}]}"#.utf8))
+        try expect(truncated.availableCount == 5 && truncated.credits.count == 1, "available_count wins when the list is shorter")
+        let unknown = try CodexWebUsage.resetCredits(from: Data(#"{"unexpected":true}"#.utf8))
+        try expect(unknown.availableCount == 0, "An unfamiliar JSON body is an empty credits list")
     }
 
     static func claudeResponseShapes() throws {
@@ -742,9 +856,18 @@ struct ProviderRegressionTests {
         FixtureProtocol.responses = [(200, #"{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":40}}}"#)]
         let snapshot = try await provider.fetchSnapshot()
         try expect(snapshot.provider == .codex && snapshot.remainingPercent == 60 && snapshot.planName == "ChatGPT Plus", "Codex reads through the CLI sign-in when no app-server exists")
-        let request = FixtureProtocol.requests.last!
+        let request = FixtureProtocol.requests.first { $0.url == CodexWebUsage.endpoint }!
         try expect(request.url == CodexWebUsage.endpoint && request.httpMethod == "GET", "Official usage route, read-only")
         try expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer codex-fixture" && request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "acct-fixture", "Codex account headers")
+        policy.reset()
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [
+            (200, #"{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":40}}}"#),
+            (200, #"{"available_count":2,"credits":[{"status":"available","expires_at":"2026-07-12T01:33:14Z"}]}"#)
+        ]
+        let withCredits = try await provider.fetchSnapshot()
+        try expect(withCredits.resetCredits?.availableCount == 2, "Unused Codex resets attach to the snapshot")
+        try expect(FixtureProtocol.requests.contains { $0.url == CodexWebUsage.resetCreditsEndpoint }, "Reset credits use the official ChatGPT route")
         FixtureProtocol.responses = [(401, "{}")]
         do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Codex 401") }
         catch CodexProviderError.unauthorized { checks += 1 }
@@ -760,6 +883,16 @@ struct ProviderRegressionTests {
         let missing = CodexUsageProvider(session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: { nil })
         do { _ = try await missing.fetchSnapshot(); throw Failure(description: "Expected not installed") }
         catch CodexProviderError.notInstalled { checks += 1 }
+        let namedProfile = CodexProfile(provider: ProviderID(rawValue: "codex-work")!, home: root, environment: [:])
+        let namedMissing = CodexUsageProvider(profile: namedProfile, session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: { nil })
+        do { _ = try await namedMissing.fetchSnapshot(); throw Failure(description: "Expected named profile sign-in guidance") }
+        catch CodexProviderError.profileNotSignedIn(let guidance) {
+            try expect(guidance.contains("codex-work"), "A named Codex home says how to sign it in")
+            try expect(CodexProviderError.profileNotSignedIn(guidance).providerHealth == .signedOut(guidance), "A signed-out named Codex home is signed out, not uninstalled")
+        }
+        let namedAPIKey = CodexUsageProvider(profile: namedProfile, session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: { throw CodexProviderError.notSignedIn })
+        do { _ = try await namedAPIKey.fetchSnapshot(); throw Failure(description: "Expected named profile sign-in guidance") }
+        catch CodexProviderError.profileNotSignedIn { checks += 1 }
         let expired = CodexUsageProvider(session: session, retryPolicy: policy, locateExecutable: { nil }, loadCredential: {
             CodexWebCredential(accessToken: "codex-fixture", accountID: "acct-fixture", expiresAt: .distantPast, email: nil, planType: nil)
         })

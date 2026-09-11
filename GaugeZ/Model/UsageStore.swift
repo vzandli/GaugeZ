@@ -247,8 +247,8 @@ final class UsageStore: ObservableObject {
                 }
                 // Codex and Antigravity are inferred from write recency: an eight-second pause is
                 // a think, not a finish, so they never become idle and never announce completion.
-                if enabled.contains(.codex) {
-                    found += await reader.readCodexSessions()
+                for provider in enabled where provider.kind == .codex {
+                    found += await reader.readCodexSessions(provider: provider, codexHome: CodexProfile(provider: provider).directory)
                 }
                 if enabled.contains(.antigravity) {
                     found += await reader.readAntigravitySessions()
@@ -285,6 +285,7 @@ final class UsageStore: ObservableObject {
 
     /// Explicit retry can ask for Keychain permission again; automatic polling never clears a refusal.
     func retry(_ provider: ProviderID) {
+        KeychainAccess.grantInteractiveRead()
         providers[provider]?.forgetCredentials()
         refresh(provider)
     }
@@ -347,7 +348,12 @@ final class UsageStore: ObservableObject {
                 ClaudeProfile(provider: ProviderID(rawValue: index == 1 ? "claude-work" : "claude-profile-\(index)")!)
             }
             : ClaudeProfile.discover()
-        let available = profiles.map(\.provider) + ProviderID.allCases.filter { $0 != .claude }
+        let codexProfiles = isPreview
+            ? [CodexProfile(), CodexProfile(provider: ProviderID(rawValue: "codex-work")!)]
+            : CodexProfile.discover()
+        let available = profiles.map(\.provider)
+            + ProviderID.allCases.filter { $0 != .claude && $0 != .codex }
+            + codexProfiles.map(\.provider)
         snapshots = Dictionary(
             uniqueKeysWithValues: available.map { provider in
                 (provider, .placeholder(for: provider))
@@ -363,13 +369,16 @@ final class UsageStore: ObservableObject {
         } else {
             enabledProviders = Set(available)
         }
-        providers = [.codex: CodexUsageProvider(), .cursor: CursorUsageProvider(),
+        providers = [.cursor: CursorUsageProvider(),
                      .antigravity: AntigravityUsageProvider(), .glm: GLMUsageProvider(), .grok: GrokUsageProvider(),
                      .opencode: OpenCodeUsageProvider(), .copilot: GitHubCopilotProvider()]
         for profile in profiles {
             providers[profile.provider] = ClaudeUsageProvider(profile: profile, selectedSource: {
                 ClaudeSource(rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? "") ?? .desktop
             })
+        }
+        for profile in codexProfiles {
+            providers[profile.provider] = CodexUsageProvider(profile: profile)
         }
 
         displayMode = DisplayMode(
@@ -721,13 +730,13 @@ final class UsageStore: ObservableObject {
         let center = NSWorkspace.shared.notificationCenter
         let pairs: [(Notification.Name, (ProviderID) -> Void)] = [
             (NSWorkspace.didLaunchApplicationNotification, { [weak self] provider in
-                self?.refresh(provider, after: .seconds(8))
+                self?.refreshMatching(provider) { $0.refresh($1, after: .seconds(8)) }
             }),
             (NSWorkspace.didActivateApplicationNotification, { [weak self] provider in
-                self?.refreshIfIdle(provider, for: 60)
+                self?.refreshMatching(provider) { $0.refreshIfIdle($1, for: 60) }
             }),
             (NSWorkspace.didTerminateApplicationNotification, { [weak self] provider in
-                self?.refresh(provider, after: .seconds(1))
+                self?.refreshMatching(provider) { $0.refresh($1, after: .seconds(1)) }
             })
         ]
         for (name, action) in pairs {
@@ -740,6 +749,14 @@ final class UsageStore: ObservableObject {
                 Task { @MainActor in action(provider) }
             }
             applicationObservers.append(observer)
+        }
+    }
+
+    private func refreshMatching(_ provider: ProviderID, _ body: (UsageStore, ProviderID) -> Void) {
+        if provider.kind == .codex {
+            for item in enabledProviders where item.kind == .codex { body(self, item) }
+        } else {
+            body(self, provider)
         }
     }
 
@@ -776,8 +793,9 @@ enum SnapshotCache {
         let source: String
         let costInfo: ProviderCostInfo?
         let headlineWindowID: String?
+        let resetCredits: CodexResetCredits?
 
-        init(provider: ProviderID, planName: String?, windows: [UsageWindow], observedAt: Date, source: String, costInfo: ProviderCostInfo? = nil, headlineWindowID: String? = nil) {
+        init(provider: ProviderID, planName: String?, windows: [UsageWindow], observedAt: Date, source: String, costInfo: ProviderCostInfo? = nil, headlineWindowID: String? = nil, resetCredits: CodexResetCredits? = nil) {
             self.provider = provider
             self.planName = planName
             self.windows = windows
@@ -785,6 +803,7 @@ enum SnapshotCache {
             self.source = source
             self.costInfo = costInfo
             self.headlineWindowID = headlineWindowID
+            self.resetCredits = resetCredits
         }
     }
 
@@ -814,7 +833,8 @@ enum SnapshotCache {
                 observedAt: entry.observedAt,
                 source: entry.source,
                 health: .stale(staleMessage),
-                costInfo: entry.costInfo, headlineWindowID: entry.headlineWindowID
+                costInfo: entry.costInfo, headlineWindowID: entry.headlineWindowID,
+                resetCredits: entry.resetCredits
             )
         }
     }
@@ -823,7 +843,7 @@ enum SnapshotCache {
         let entries = snapshots
             .filter { !$0.windows.isEmpty }
             .sorted { $0.provider.rawValue < $1.provider.rawValue }
-            .map { Entry(provider: $0.provider, planName: $0.planName, windows: $0.windows, observedAt: $0.observedAt, source: $0.source, costInfo: $0.costInfo, headlineWindowID: $0.headlineWindowID) }
+            .map { Entry(provider: $0.provider, planName: $0.planName, windows: $0.windows, observedAt: $0.observedAt, source: $0.source, costInfo: $0.costInfo, headlineWindowID: $0.headlineWindowID, resetCredits: $0.resetCredits) }
         do {
             let url = fileURL
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

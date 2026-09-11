@@ -86,6 +86,20 @@ struct UsageDetailCard: View {
                     .truncationMode(.middle)
             }
 
+            if let credits = snapshot.resetCredits, credits.availableCount > 0 {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(credits.availableCount == 1
+                         ? String(localized: "1 unused rate-limit reset", bundle: .language)
+                         : String.localizedStringWithFormat(String(localized: "%lld unused rate-limit resets", bundle: .language), Int64(credits.availableCount)))
+                        .font(.caption2.weight(.semibold))
+                    if let expiry = credits.nextExpiry {
+                        Text(String.localizedStringWithFormat(String(localized: "Next expires %@", bundle: .language), ResetCopy.absolute(expiry)))
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+            }
+
             if let message = snapshot.health.message, !snapshot.windows.isEmpty {
                 Label(message, systemImage: "clock.badge.exclamationmark")
                     .font(.caption2)

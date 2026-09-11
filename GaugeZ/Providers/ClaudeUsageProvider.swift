@@ -246,8 +246,13 @@ enum ClaudeCredentialReader {
             let oauth = object["claudeAiOauth"] as? [String: Any]
         else { throw ClaudeProviderError.malformedCredential }
 
-        guard let token = oauth["accessToken"] as? String, !token.isEmpty else {
+        guard let token = oauth["accessToken"] as? String else {
             throw ClaudeProviderError.notSignedIn
+        }
+        // Claude Code rewrites this item with `accessToken: ""` after some updates. It decodes
+        // and is worth nothing. Reporting it as signed-out would erase a good last reading.
+        guard !token.isEmpty else {
+            throw ClaudeProviderError.signedOutByOwner
         }
 
         var expiresAt: Date?
@@ -279,9 +284,10 @@ enum ClaudeDesktopCredentialReader {
     static func load() throws -> ClaudeCredential {
         var sawPermissionProblem: OSStatus?
         var passwordData: Data?
+        let interactive = KeychainAccess.consumeInteractive()
 
         for service in candidateServices {
-            switch readKeychainPassword(service: service) {
+            switch readKeychainPassword(service: service, interactive: interactive) {
             case .success(let data):
                 passwordData = data
             case .failure(.notFound):
@@ -426,24 +432,27 @@ enum ClaudeDesktopCredentialReader {
         case other(OSStatus)
     }
 
-    private static func readKeychainPassword(service: String) -> Result<Data, KeychainFailure> {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+    private static func readKeychainPassword(service: String, interactive: Bool) -> Result<Data, KeychainFailure> {
+        let (status, data) = KeychainSecret.read(
+            query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+                kSecReturnData as String: true
+            ],
+            interactive: interactive,
+            // The desktop app wrote this item itself, so `security` is not on its access list
+            // and would raise the dialogue from its own process. No rescue for it.
+            rescue: nil
+        )
         switch status {
         case errSecSuccess:
-            guard let data = result as? Data, !data.isEmpty else { return .failure(.notFound) }
+            guard let data, !data.isEmpty else { return .failure(.notFound) }
             return .success(data)
         case errSecItemNotFound:
             return .failure(.notFound)
-        case errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed, errSecInteractionRequired:
-            return .failure(.denied(status))
         default:
+            if ClaudeKeychain.wasRefused(status) { return .failure(.denied(status)) }
             return .failure(.other(status))
         }
     }
@@ -555,6 +564,7 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
     case noDesktopLog
     case desktopLogMalformed
     case notSignedIn
+    case signedOutByOwner
     case profileNotSignedIn(String)
     case keychainDenied(OSStatus)
     case keychainUnavailable(OSStatus)
@@ -578,6 +588,8 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
             String(localized: "Claude's usage log has an unsupported format.", bundle: .language)
         case .notSignedIn:
             String(localized: "No Claude Code CLI sign-in was found in Keychain. Run `claude` and sign in, or switch the Claude source to the desktop app.", bundle: .language)
+        case .signedOutByOwner:
+            String(localized: "Claude Code cleared this sign-in. The last reading is kept until you sign in again.", bundle: .language)
         case .profileNotSignedIn(let guidance):
             guidance
         case .keychainDenied:
@@ -614,6 +626,8 @@ enum ClaudeProviderError: LocalizedError, ProviderHealthDescribing {
         switch self {
         case .noDesktopLog, .notSignedIn, .profileNotSignedIn, .unauthorized:
             return .signedOut(message)
+        case .signedOutByOwner:
+            return .stale(message)
         case .keychainDenied:
             return .permissionRequired(message)
         case .tokenExpired, .rateLimited, .offline, .server, .keychainUnavailable:

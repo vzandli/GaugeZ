@@ -221,7 +221,7 @@ actor ActivityReader {
     /// ago, so it errs short, and the row is labeled as inferred.
     static let codexStaleAfter: TimeInterval = 8
 
-    func readCodexSessions(codexHome: URL = ActivityReader.codexHome(), now: Date = .now, includeIdle: Bool = false) -> [ActivitySession] {
+    func readCodexSessions(provider: ProviderID = .codex, codexHome: URL = ActivityReader.codexHome(), now: Date = .now, includeIdle: Bool = false) -> [ActivitySession] {
         var candidates: [(id: String, name: String, at: Date)] = []
         if let rollout = Self.newestCodexRollout(in: codexHome),
            let modified = (try? rollout.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
@@ -232,7 +232,7 @@ actor ActivityReader {
         }
         guard let newest = candidates.max(by: { $0.at < $1.at }),
               now.timeIntervalSince(newest.at) <= (includeIdle ? 900 : Self.codexStaleAfter) else { return [] }
-        return [ActivitySession(id: newest.id, provider: .codex, name: String(newest.name.prefix(100)), project: "Codex",
+        return [ActivitySession(id: "\(provider.rawValue)-\(newest.id)", provider: provider, name: String(newest.name.prefix(100)), project: provider.displayName,
                                 state: now.timeIntervalSince(newest.at) <= Self.codexStaleAfter ? .working : .idle, waitingReason: nil, since: newest.at, isInferred: true)]
     }
 

@@ -7,32 +7,37 @@ import Foundation
 actor CodexUsageProvider: UsageProviding {
     private let session: URLSession
     private let retryPolicy: ProviderRetryPolicy
+    private let profile: CodexProfile
     private let locateExecutable: @Sendable () -> URL?
     private let loadCredential: @Sendable () throws -> CodexWebCredential?
 
-    init(session: URLSession? = nil, retryPolicy: ProviderRetryPolicy? = nil,
+    init(profile: CodexProfile = CodexProfile(), session: URLSession? = nil, retryPolicy: ProviderRetryPolicy? = nil,
          locateExecutable: @escaping @Sendable () -> URL? = { CodexInstallation.locateExecutable() },
-         loadCredential: @escaping @Sendable () throws -> CodexWebCredential? = { try CodexWebCredential.load() }) {
+         loadCredential: (@Sendable () throws -> CodexWebCredential?)? = nil) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.waitsForConnectivity = false
         configuration.urlCache = nil
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
+        self.profile = profile
         self.session = session ?? URLSession(configuration: configuration)
-        self.retryPolicy = retryPolicy ?? ProviderRetryPolicy(provider: .codex)
+        self.retryPolicy = retryPolicy ?? ProviderRetryPolicy(provider: profile.provider)
         self.locateExecutable = locateExecutable
-        self.loadCredential = loadCredential
+        self.loadCredential = loadCredential ?? { try CodexWebCredential.load(url: profile.authURL) }
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
         try retryPolicy.check()
-        let snapshot: UsageSnapshot
-        if let executable = locateExecutable() {
-            snapshot = try await appServerSnapshot(executable: executable)
-        } else {
-            snapshot = try await webSnapshot()
+        // Extra homes are their own ChatGPT sign-in. The bundled app-server talks to whichever
+        // account the default Codex install is using, so it must not answer for a named profile.
+        if profile.slug == nil, let executable = locateExecutable() {
+            let snapshot = try await appServerSnapshot(executable: executable)
+            retryPolicy.succeeded()
+            let credential = try? loadCredential()
+            return await attachingResetCredits(snapshot, credential: credential)
         }
+        let snapshot = try await webSnapshot()
         retryPolicy.succeeded()
         return snapshot
     }
@@ -55,7 +60,17 @@ actor CodexUsageProvider: UsageProviding {
     }
 
     private func webSnapshot() async throws -> UsageSnapshot {
-        guard let credential = try loadCredential() else { throw CodexProviderError.notInstalled }
+        let credential: CodexWebCredential
+        do {
+            guard let loaded = try loadCredential() else {
+                throw profile.slug == nil
+                    ? CodexProviderError.notInstalled
+                    : CodexProviderError.profileNotSignedIn(profile.signInGuidance)
+            }
+            credential = loaded
+        } catch CodexProviderError.notSignedIn where profile.slug != nil {
+            throw CodexProviderError.profileNotSignedIn(profile.signInGuidance)
+        }
         if let expiresAt = credential.expiresAt, expiresAt < .now { throw CodexProviderError.sessionExpired }
 
         var request = URLRequest(url: CodexWebUsage.endpoint)
@@ -85,8 +100,8 @@ actor CodexUsageProvider: UsageProviding {
         }
 
         let windows = try CodexWebUsage.windows(from: data)
-        return UsageSnapshot(
-            provider: .codex,
+        let snapshot = UsageSnapshot(
+            provider: profile.provider,
             accountID: credential.email,
             planName: credential.planType.map { "ChatGPT \($0.capitalized)" },
             windows: windows,
@@ -94,6 +109,34 @@ actor CodexUsageProvider: UsageProviding {
             source: "ChatGPT usage endpoint (Codex CLI sign-in)",
             health: .live
         )
+        return await attachingResetCredits(snapshot, credential: credential)
+    }
+
+    private func attachingResetCredits(_ snapshot: UsageSnapshot, credential: CodexWebCredential?) async -> UsageSnapshot {
+        guard let credential else { return snapshot }
+        let credits = await Self.fetchResetCredits(session: session, credential: credential)
+        return snapshot.withResetCredits(credits)
+    }
+
+    private static func fetchResetCredits(session: URLSession, credential: CodexWebCredential) async -> CodexResetCredits? {
+        var request = URLRequest(url: CodexWebUsage.resetCreditsEndpoint)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(credential.accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
+        request.setValue("GaugeZ/\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+        do {
+            let (data, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status) else { return nil }
+            return try CodexWebUsage.resetCredits(from: data)
+        } catch {
+            return nil
+        }
     }
 }
 
@@ -217,6 +260,7 @@ struct CodexWebCredential: Sendable {
 /// `additional_rate_limits` and `code_review_rate_limit` meter something else and are left out.
 enum CodexWebUsage {
     static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+    static let resetCreditsEndpoint = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
 
     static func windows(from data: Data, now: Date = .now) throws -> [UsageWindow] {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -247,6 +291,78 @@ enum CodexWebUsage {
         }
         guard !windows.isEmpty else { throw CodexProviderError.noUsageWindows }
         return windows
+    }
+
+    /// `available_count` is trusted even when the `credits` array is truncated. An unfamiliar
+    /// JSON body yields an empty list rather than failing the usage fetch.
+    static func resetCredits(from data: Data) throws -> CodexResetCredits {
+        let response: ResetCreditsResponse
+        do {
+            response = try JSONDecoder().decode(ResetCreditsResponse.self, from: data)
+        } catch {
+            if (try? JSONSerialization.jsonObject(with: data)) != nil {
+                return CodexResetCredits(availableCount: 0, credits: [])
+            }
+            throw CodexProviderError.malformedResponse
+        }
+        let credits = response.credits.map {
+            CodexResetCredits.Credit(id: $0.id, status: $0.status, expiresAt: $0.expiresAt)
+        }
+        let availableCount = response.availableCount
+            ?? credits.filter { $0.status == "available" }.count
+        return CodexResetCredits(availableCount: availableCount, credits: credits)
+    }
+
+    private struct ResetCreditsResponse: Decodable {
+        let credits: [ResetCredit]
+        let availableCount: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case credits
+            case available_count
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            availableCount = try? container.decode(Int.self, forKey: .available_count)
+            let items = (try? container.decode([FailableResetCredit].self, forKey: .credits)) ?? []
+            credits = items.compactMap(\.value)
+        }
+    }
+
+    private struct FailableResetCredit: Decodable {
+        let value: ResetCredit?
+        init(from decoder: Decoder) throws {
+            value = try? ResetCredit(from: decoder)
+        }
+    }
+
+    private struct ResetCredit: Decodable {
+        let id: String
+        let status: String
+        let expiresAt: Date?
+
+        private enum CodingKeys: String, CodingKey {
+            case id, status, expires_at
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+            status = try container.decodeIfPresent(String.self, forKey: .status) ?? ""
+            if let text = try? container.decode(String.self, forKey: .expires_at) {
+                expiresAt = parseISO8601(text)
+            } else {
+                expiresAt = nil
+            }
+        }
+    }
+
+    private static func parseISO8601(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) { return date }
+        return ISO8601DateFormatter().date(from: text)
     }
 }
 
@@ -507,6 +623,7 @@ private struct RateLimitWindow: Decodable {
 enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
     case notInstalled
     case notSignedIn
+    case profileNotSignedIn(String)
     case malformedCredential
     case sessionExpired
     case unauthorized
@@ -534,6 +651,8 @@ enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
             return String(localized: "Codex is not installed. Install the Codex app, ChatGPT, or the codex CLI and sign in.", bundle: .language)
         case .notSignedIn:
             return String(localized: "The Codex CLI is not signed in to ChatGPT. Run `codex login`, or install the Codex app.", bundle: .language)
+        case .profileNotSignedIn(let guidance):
+            return guidance
         case .malformedCredential:
             return String(localized: "The Codex CLI sign-in has an unsupported format.", bundle: .language)
         case .sessionExpired:
@@ -567,7 +686,7 @@ enum CodexProviderError: LocalizedError, ProviderHealthDescribing {
         switch self {
         case .server(let message) where Self.looksUnauthorized(message):
             return .signedOut(text)
-        case .notSignedIn, .unauthorized:
+        case .notSignedIn, .profileNotSignedIn, .unauthorized:
             return .signedOut(text)
         case .server, .timedOut, .noResponse, .sessionExpired, .offline:
             return .stale(text)
