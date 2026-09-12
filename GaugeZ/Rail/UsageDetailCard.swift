@@ -45,6 +45,9 @@ struct UsageDetailCard: View {
                 .buttonStyle(.bordered)
                 .tint(event.reason == .blocked ? .orange : .green)
             }
+            if let usageEvent = store.usageEventPeek, usageEvent.provider == snapshot.provider {
+                UsageEventBanner(event: usageEvent) { store.dismissUsageEvent() }
+            }
             if let count = snapshot.derivedRequestCount {
                 Text("~\(count) model turns today · derived from local transcripts")
                     .font(.caption.weight(.semibold))
@@ -332,5 +335,66 @@ private struct UsageBar: View {
     }
 
     private var color: Color { .quota(remainingPercent: remainingPercent) }
+}
+
+/// The card's announcement of a limit transition, shown while the store holds the event peek
+/// open: a limit that bit, or one that rolled over and came back.
+struct UsageEventBanner: View {
+    let event: UsageEvent
+    let dismiss: () -> Void
+
+    private var isReset: Bool { event.kind == .limitReset }
+    private var accent: Color { isReset ? .green : .red }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isReset ? "arrow.counterclockwise.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(accent)
+                .font(.system(size: 15))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(3)
+            }
+            .buttonStyle(.plain)
+            .help(Text("Dismiss", bundle: .language))
+            .accessibilityLabel(Text("Dismiss", bundle: .language))
+        }
+        .padding(10)
+        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(accent.opacity(0.22), lineWidth: 1)
+        }
+    }
+
+    private var title: String {
+        isReset
+            ? String(localized: "Limit reset", bundle: .language)
+            : String.localizedStringWithFormat(String(localized: "%@ reached", bundle: .language), event.window.label)
+    }
+
+    private var subtitle: String {
+        if isReset {
+            return String.localizedStringWithFormat(
+                String(localized: "%1$@ · %2$@%% available", bundle: .language),
+                event.window.label, PercentCopy.text(event.window.remainingPercent))
+        }
+        if let reset = event.window.resetsAt, reset > .now {
+            return String.localizedStringWithFormat(String(localized: "Resets %@", bundle: .language), ResetCopy.absolute(reset))
+        }
+        return String(localized: "0% remaining", bundle: .language)
+    }
 }
 

@@ -32,6 +32,7 @@ struct ProviderRegressionTests {
         try keychainPrompt()
         try emptiedClaudeLogin(root)
         try automaticHeadline()
+        try usageEvents()
         try antigravityUnifiedParser()
         try codexResetCredits()
         try claudeResponseShapes()
@@ -466,6 +467,98 @@ struct ProviderRegressionTests {
         var selected = snapshot
         selected.headlineWindowID = "session"
         try expect(selected.headlineWindow?.id == "session", "An explicit headline is honoured even when exhausted")
+    }
+
+    static func usageEvents() throws {
+        func window(_ id: String, used: Double, resetsAt: Date? = nil) -> UsageWindow {
+            UsageWindow(id: id, label: id == "session" ? "5-hour" : "Weekly", usedPercent: used, resetsAt: resetsAt, durationMinutes: 300)
+        }
+        func snapshot(_ windows: [UsageWindow], health: ProviderHealth = .live) -> UsageSnapshot {
+            UsageSnapshot(provider: .claude, accountID: nil, planName: nil, windows: windows,
+                          observedAt: .now, source: "fixture", health: health)
+        }
+
+        var watcher = UsageEventWatcher()
+        try expect(watcher.observe(snapshot([window("session", used: 100)])).isEmpty,
+                   "The first observation of a limit event watcher never announces")
+        try expect(watcher.observe(snapshot([window("session", used: 100)])).isEmpty,
+                   "A window already exhausted does not announce again")
+        try expect(watcher.observe(snapshot([window("session", used: 97)])).isEmpty,
+                   "A recovery under the hysteresis floor keeps the limit latched")
+        try expect(watcher.observe(snapshot([window("session", used: 100)])).isEmpty,
+                   "Re-crossing inside the hysteresis band is not a new crossing")
+        try expect(watcher.observe(snapshot([window("session", used: 94)])).isEmpty,
+                   "Climbing clear of the floor clears the latch without an event")
+        let reached = watcher.observe(snapshot([window("session", used: 100)]))
+        try expect(reached.map(\.kind) == [.limitReached], "A window reaching zero announces the limit")
+        try expect(reached.first?.window.id == "session", "The limit event names its window")
+        try expect(watcher.observe(snapshot([window("session", used: 99.8)])).isEmpty,
+                   "Jitter under the hysteresis floor keeps the limit latched")
+        try expect(watcher.observe(snapshot([window("session", used: 100)])).isEmpty,
+                   "A re-exhaustion inside the jitter band does not announce twice")
+
+        var rolloverWatcher = UsageEventWatcher()
+        let rollover = Date().addingTimeInterval(3600)
+        // Remaining stays at or above 50 throughout, so the slack is what decides, not the
+        // freshness gate; and the rise stays under the refill jump.
+        _ = rolloverWatcher.observe(snapshot([window("session", used: 60, resetsAt: Date().addingTimeInterval(600))]))
+        try expect(rolloverWatcher.observe(snapshot([window("session", used: 50, resetsAt: Date().addingTimeInterval(720))])).isEmpty,
+                   "A reset time sliding by minutes is not a rollover")
+        let reset = rolloverWatcher.observe(snapshot([window("session", used: 5, resetsAt: rollover)]))
+        try expect(reset.map(\.kind) == [.limitReset], "A reset time pushed out by the window length announces the reset")
+        try expect(reset.first?.window.remainingPercent == 95, "The reset event carries the fresh reading")
+        try expect(rolloverWatcher.observe(snapshot([window("session", used: 8, resetsAt: rollover)])).isEmpty,
+                   "The reset announces once per rollover")
+        let idleRollover = rollover.addingTimeInterval(5 * 3600)
+        try expect(rolloverWatcher.observe(snapshot([window("session", used: 8, resetsAt: idleRollover)])).isEmpty,
+                   "A window left idle since its last reset has nothing to reset")
+        _ = rolloverWatcher.observe(snapshot([window("session", used: 40, resetsAt: idleRollover)]))
+        try expect(rolloverWatcher.observe(snapshot([window("session", used: 2, resetsAt: idleRollover.addingTimeInterval(5 * 3600))])).map(\.kind) == [.limitReset],
+                   "Using the fresh window again makes its next rollover a reset")
+
+        var slideWatcher = UsageEventWatcher()
+        _ = slideWatcher.observe(snapshot([window("session", used: 80, resetsAt: Date().addingTimeInterval(600))]))
+        try expect(slideWatcher.observe(snapshot([window("session", used: 40, resetsAt: Date().addingTimeInterval(720))])).isEmpty,
+                   "Remaining climbing under a reset time that only slid is not a reset")
+
+        var refillWatcher = UsageEventWatcher()
+        // Remaining stays above 50, so the jump size is what decides.
+        _ = refillWatcher.observe(snapshot([window("session", used: 45)]))
+        try expect(refillWatcher.observe(snapshot([window("session", used: 40)])).isEmpty,
+                   "A small rise in remaining is not a reset")
+        try expect(refillWatcher.observe(snapshot([window("session", used: 5)])).map(\.kind) == [.limitReset],
+                   "Remaining leaping back announces a reset when no reset time is reported")
+
+        var unusedWatcher = UsageEventWatcher()
+        _ = unusedWatcher.observe(snapshot([window("session", used: 10, resetsAt: Date().addingTimeInterval(600))]))
+        try expect(unusedWatcher.observe(snapshot([window("session", used: 0, resetsAt: rollover)])).isEmpty,
+                   "A window that was never used does not announce a reset")
+
+        var staleWatcher = UsageEventWatcher()
+        _ = staleWatcher.observe(snapshot([window("session", used: 50)]))
+        try expect(staleWatcher.observe(snapshot([window("session", used: 100)], health: .stale("fixture"))).isEmpty,
+                   "Stale readings never announce transitions")
+
+        var mutedWatcher = UsageEventWatcher()
+        _ = mutedWatcher.observe(snapshot([window("session", used: 50)]))
+        try expect(mutedWatcher.observe(snapshot([window("session", used: 100)]), muted: true).isEmpty,
+                   "A muted provider announces nothing")
+        try expect(mutedWatcher.observe(snapshot([window("session", used: 100)])).isEmpty,
+                   "Unmuting does not replay the transition missed while muted")
+
+        var forgottenWatcher = UsageEventWatcher()
+        _ = forgottenWatcher.observe(snapshot([window("session", used: 80)]))
+        forgottenWatcher.forget(.claude)
+        try expect(forgottenWatcher.observe(snapshot([window("session", used: 100)])).isEmpty,
+                   "A forgotten provider seeds again without announcing")
+
+        var weeklyWatcher = UsageEventWatcher()
+        _ = weeklyWatcher.observe(snapshot([window("session", used: 50), window("weekly", used: 90)]))
+        let weekly = weeklyWatcher.observe(snapshot([window("session", used: 50), window("weekly", used: 100)]))
+        try expect(weekly.map(\.kind) == [.limitReached] && weekly.first?.window.id == "weekly",
+                   "Each window announces on its own key")
+        try expect(weeklyWatcher.observe(snapshot([window("session", used: 50), window("weekly", used: 100)])).isEmpty,
+                   "A settled window exhausting again stays quiet")
     }
 
     static func antigravityUnifiedParser() throws {

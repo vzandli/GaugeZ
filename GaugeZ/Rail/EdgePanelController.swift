@@ -259,6 +259,16 @@ final class EdgePanelController {
             self.toggleSettings()
             self.railHoverChanged(false)
             try? await Task.sleep(for: step)
+            // The limit-event cards, from a folded rail as in real life: reached, then
+            // reset, then folded away by dismissal.
+            self.setExpanded(false)
+            try? await Task.sleep(for: step)
+            self.store.previewUsageEvent(.limitReached)
+            try? await Task.sleep(for: step)
+            self.store.previewUsageEvent(.limitReset)
+            try? await Task.sleep(for: step)
+            self.store.dismissUsageEvent()
+            try? await Task.sleep(for: step)
             NotificationCenter.default.post(name: .gaugezOpenSettings, object: nil)
         }
     }
@@ -285,8 +295,45 @@ final class EdgePanelController {
         panel.close()
     }
 
+    /// A limit event is announcing itself: the rail holds open until the store clears it,
+    /// the way a session completion holds until its peek timer ends.
+    private var usageEventHoldOpen = false
+
+    private func usageEventPeekChanged(_ event: UsageEvent?) {
+        debugNote("usage event -> \(event.map { "\($0.kind) \($0.provider.rawValue)" } ?? "nil") dragging=\(isDragging) mode=\(store.displayMode) attachment=\(String(describing: state.attachment)) pinned=\(isAttachmentPinned)")
+        guard let event else {
+            // The store dismissed it (its timer or the banner's button). The hold is released
+            // even mid-drag — a release that landed while dragging must not outlive the drag —
+            // and the rail folds when the pointer is nowhere near it, otherwise control goes
+            // back to the hover machine.
+            usageEventHoldOpen = false
+            guard !isDragging else { return }
+            if peekEvent == nil, !isAttachmentPinned, !pointerIsOverVisibleContent {
+                setAttachment(nil)
+                if store.displayMode == .hover { setExpanded(false) }
+            }
+            return
+        }
+        // Only a card that actually opens holds the rail: a peek refused for a pinned card,
+        // open settings, or a hidden rail must not block the next collapse.
+        guard !isDragging, store.displayMode != .hidden, state.attachment != .settings, !isAttachmentPinned else { return }
+        usageEventHoldOpen = true
+        // A session peek in progress hands over: its timer was the only thing clearing
+        // `peekEvent`, so the event goes with it or the rail never folds again.
+        peekTask?.cancel()
+        peekEvent = nil
+        collapseTask?.cancel()
+        attachmentTask?.cancel()
+        if let index = store.visibleProviders.firstIndex(of: event.provider) {
+            store.railPage = index / store.railPageCapacity
+        }
+        setExpanded(true)
+        setAttachment(.detail(event.provider))
+    }
+
     private func peek(_ event: SessionCompletionWatcher.Event) {
         guard store.displayMode != .hidden, state.attachment != .settings, !isAttachmentPinned, !isDragging else { return }
+        usageEventHoldOpen = false
         peekTask?.cancel()
         collapseTask?.cancel()
         attachmentTask?.cancel()
@@ -369,10 +416,16 @@ final class EdgePanelController {
     /// window on the old edge after the side is switched.
     private func observeSettings() {
         store.sessionCompletions.sink { [weak self] event in self?.peek(event) }.store(in: &cancellables)
+        store.$usageEventPeek
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in self?.usageEventPeekChanged(event) }
+            .store(in: &cancellables)
         store.$railPage.dropFirst().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
-                guard self.peekEvent == nil else { self.positionPanel(animated: false); return }
+                // A peek — session or limit event — opens by paging to its provider, and
+                // that page change must not close the card it just opened.
+                guard self.peekEvent == nil, !self.usageEventHoldOpen else { self.positionPanel(animated: false); return }
                 self.attachmentTask?.cancel()
                 self.state.hoveredProvider = nil
                 self.isAttachmentPinned = false
@@ -506,7 +559,7 @@ final class EdgePanelController {
     }
 
     private func scheduleCollapse() {
-        guard !isDragging, peekEvent == nil else { return }
+        guard !isDragging, peekEvent == nil, !usageEventHoldOpen else { return }
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled, let self, !self.isPointerInRail, !self.isPointerInAttachment, !self.isDragging else { return }
@@ -558,6 +611,7 @@ final class EdgePanelController {
     }
 
     private func providerSelected(_ provider: ProviderID) {
+        usageEventHoldOpen = false
         if let event = peekEvent, event.session.provider == provider {
             SessionFocus.activate(event.session)
             peekEvent = nil

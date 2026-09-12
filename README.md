@@ -33,10 +33,13 @@ rail on the edge of your screen. Hover to expand it, read the rings, get back to
   The detail card lists every window with its reset time.
 - **Honest states.** Live, stale, signed out, permission needed, and unavailable are
   distinct. Missing data is never shown as `0%`.
-- **Usage alerts.** Notifications at 20% and 0% remaining, mutable per provider.
+- **Limit events.** The rail opens a card when a window reaches 0% remaining and again when
+  it rolls over, with optional chimes; system notifications fire at 20% and 0% remaining.
+  All of it is tuned in **Settings → Notifications** and mutable per provider.
 - **Session activity.** Optional. See which Claude Code, Cursor, Grok Build, Codex, and
   Antigravity sessions are working, waiting, or idle. The rail can peek and chime when a
-  session finishes or needs input.
+  session finishes or needs input, and clicking it lands on the session's own terminal tab
+  in Terminal.app, iTerm2, and cmux.
 - **Multiple Claude Code accounts.** Each `~/.claude-*` profile gets its own ring.
 - **Make it yours.** Reorder providers, resize the notch, pick an edge and display, choose
   glass or solid, and decide whether GaugeZ shows in the Dock, the menu bar, or neither.
@@ -158,6 +161,6 @@ guessed number when the upstream format changes.
 
 ## Thanks
 
-Claude transcript activity handling, the GitHub Copilot and GLM rings, and the Grok and Copilot logos are adapted from Codenotch
+Claude transcript activity handling, the GitHub Copilot and GLM rings, the Grok and Copilot logos, and terminal tab focus on session click are adapted from Codenotch
 (MIT); see [Third-party notices](GaugeZ/Resources/ThirdPartyNotices.txt).
 Edge rail design inspiration: [@hivinz_](https://x.com/hivinz_).

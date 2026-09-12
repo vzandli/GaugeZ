@@ -1,4 +1,4 @@
-Claude transcript activity handling, the GitHub Copilot ring, the GLM ring, and the Grok and Copilot logos are adapted from Codenotch.
+Claude transcript activity handling, the GitHub Copilot ring, the GLM ring, the Grok and Copilot logos, and terminal tab focus on session click are adapted from Codenotch.
 
 MIT License
 

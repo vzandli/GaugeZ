@@ -5,6 +5,7 @@ build_dir=$(mktemp -d /tmp/gaugez-provider-tests.XXXXXX)
 trap 'rm -rf "$build_dir"' EXIT
 xcrun swiftc -parse-as-library -module-cache-path "$build_dir/module-cache" \
   GaugeZ/Model/UsageModels.swift GaugeZ/Model/ProviderRetryPolicy.swift GaugeZ/Model/ThresholdNotifier.swift \
+  GaugeZ/Model/UsageEventWatcher.swift \
   GaugeZ/Credentials/ClaudeProfile.swift GaugeZ/Credentials/ClaudeKeychain.swift \
   GaugeZ/Credentials/KeychainSecret.swift GaugeZ/Credentials/CodexProfile.swift \
   GaugeZ/Credentials/ProviderSecretCache.swift GaugeZ/Credentials/AntigravityCredentials.swift \

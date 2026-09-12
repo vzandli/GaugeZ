@@ -19,133 +19,133 @@
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "يفتح GaugeZ تطبيق Terminal لبدء Grok Build عند اختيار «فتح Grok Build»."
+            "value" : "يتحكم GaugeZ في تطبيق Terminal برمجيًا لبدء Grok Build عند اختيار «فتح Grok Build»، ولتحديد علامة التبويب التي تعمل فيها الجلسة عند النقر عليها."
           }
         },
         "bn" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "আপনি যখন 'Open Grok Build' বেছে নেন তখন Grok Build শুরু করার জন্য GaugeZ টার্মিনাল খোলে।"
+            "value" : "আপনি 'Open Grok Build' বেছে নিলে Grok Build শুরু করতে এবং কোনো সেশনে ক্লিক করলে সেটি যে ট্যাবে চলছে তা নির্বাচন করতে GaugeZ আপনার টার্মিনাল স্ক্রিপ্ট করে।"
           }
         },
         "bs" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ otvara Terminal za pokretanje aplikacije Grok Build kada odaberete Otvori Grok Build."
+            "value" : "GaugeZ upravlja vašim terminalom da pokrene Grok Build kada odaberete Otvori Grok Build i da odabere karticu u kojoj sesija radi kada kliknete na nju."
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ öffnet das Terminal, um Grok Build zu starten, wenn Sie „Grok Build öffnen“ wählen."
+            "value" : "GaugeZ steuert Ihr Terminal, um Grok Build zu starten, wenn Sie „Grok Build öffnen“ wählen, und um den Tab einer Sitzung auszuwählen, wenn Sie darauf klicken."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ opens Terminal to start Grok Build when you choose Open Grok Build."
+            "value" : "GaugeZ scripts your terminal to start Grok Build when you choose Open Grok Build, and to select the tab a session runs in when you click it."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ abre Terminal para iniciar Grok Build al seleccionar Abrir Grok Build."
+            "value" : "GaugeZ controla tu terminal para iniciar Grok Build al seleccionar Abrir Grok Build y para seleccionar la pestaña de una sesión al hacer clic en ella."
           }
         },
         "fil" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Binubuksan ng GaugeZ ang Terminal upang simulan ang Grok Build kapag pinili mo ang Buksan ang Grok Build."
+            "value" : "Kinokontrol ng GaugeZ ang iyong terminal upang simulan ang Grok Build kapag pinili mo ang Buksan ang Grok Build, at upang piliin ang tab na tinatakbuhan ng isang session kapag na-click mo ito."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ ouvre le Terminal pour lancer Grok Build lorsque vous choisissez « Ouvrir Grok Build »."
+            "value" : "GaugeZ pilote votre terminal pour lancer Grok Build lorsque vous choisissez « Ouvrir Grok Build », et pour sélectionner l’onglet d’une session lorsque vous cliquez dessus."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "जब आप 'Open Grok Build' चुनते हैं तो Grok Build शुरू करने के लिए GaugeZ टर्मिनल खोलता है।"
+            "value" : "जब आप 'Open Grok Build' चुनते हैं तो Grok Build शुरू करने के लिए, और किसी सत्र पर क्लिक करने पर वह जिस टैब में चल रहा है उसे चुनने के लिए GaugeZ आपके टर्मिनल को स्क्रिप्ट करता है।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ apre il Terminale per avviare Grok Build quando scegli “Apri Grok Build”."
+            "value" : "GaugeZ controlla il tuo terminale per avviare Grok Build quando scegli “Apri Grok Build” e per selezionare il pannello di una sessione quando fai clic su di essa."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「Grok Buildを開く」を選択すると、GaugeZはターミナルを開いてGrok Buildを起動します。"
+            "value" : "「Grok Buildを開く」を選択するとGaugeZはターミナルを操作してGrok Buildを起動し、セッションをクリックするとそのセッションが実行中のタブを選択します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Grok Build 열기를 선택하면 GaugeZ가 터미널을 열어 Grok Build를 시작합니다."
+            "value" : "Grok Build 열기를 선택하면 GaugeZ가 터미널을 제어해 Grok Build를 시작하고, 세션을 클릭하면 해당 세션이 실행 중인 탭을 선택합니다."
           }
         },
         "mr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "तुम्ही 'Open Grok Build' निवडता तेव्हा Grok Build सुरू करण्यासाठी GaugeZ टर्मिनल उघडते."
+            "value" : "तुम्ही 'Open Grok Build' निवडता तेव्हा Grok Build सुरू करण्यासाठी, आणि एखाद्या सत्रावर क्लिक केल्यावर ते ज्या टॅबमध्ये चालू आहे तो निवडण्यासाठी GaugeZ तुमचे टर्मिनल स्क्रिप्ट करते."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O GaugeZ abre o Terminal para iniciar o Grok Build quando você seleciona Abrir Grok Build."
+            "value" : "O GaugeZ controla seu terminal para iniciar o Grok Build quando você seleciona Abrir Grok Build e para selecionar a aba de uma sessão quando você clica nela."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ открывает Терминал для запуска Grok Build при выборе команды «Открыть Grok Build»."
+            "value" : "GaugeZ управляет Терминалом, чтобы запускать Grok Build при выборе команды «Открыть Grok Build» и переключаться на вкладку сессии, когда вы нажимаете на неё."
           }
         },
         "ta" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open Grok Build என்பதைத் தேர்ந்தெடுக்கும்போது Grok Build-ஐத் தொடங்க GaugeZ டெர்மினலைத் திறக்கும்."
+            "value" : "Open Grok Build என்பதைத் தேர்ந்தெடுக்கும்போது Grok Build-ஐத் தொடங்கவும், ஒரு அமர்வைக் கிளிக் செய்யும்போது அது இயங்கும் தாவலைத் தேர்ந்தெடுக்கவும் GaugeZ உங்கள் டெர்மினலை ஸ்கிரிப்ட் செய்கிறது."
           }
         },
         "te" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "మీరు Open Grok Build ఎంచుకున్నప్పుడు Grok Build ప్రారంభించడానికి GaugeZ టెర్మినల్‌ను తెరుస్తుంది."
+            "value" : "మీరు Open Grok Build ఎంచుకున్నప్పుడు Grok Build ప్రారంభించడానికి, మరియు సెషన్‌పై క్లిక్ చేసినప్పుడు అది నడుస్తున్న ట్యాబ్‌ను ఎంచుకోవడానికి GaugeZ మీ టెర్మినల్‌ను నియంత్రిస్తుంది."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Grok Build'i Aç'ı seçtiğinizde GaugeZ, Grok Build'i başlatmak için Terminal'i açar."
+            "value" : "GaugeZ, Grok Build'i Aç'ı seçtiğinizde Grok Build'i başlatmak ve bir oturuma tıkladığınızda çalıştığı sekmeyi seçmek için terminalinizi yönetir."
           }
         },
         "ur" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "جب آپ «Grok Build کھولیں» منتخب کرتے ہیں تو GaugeZ، Grok Build شروع کرنے کے لیے Terminal کھولتا ہے۔"
+            "value" : "جب آپ «Grok Build کھولیں» منتخب کرتے ہیں تو Grok Build شروع کرنے کے لیے، اور کسی سیشن پر کلک کرنے پر وہ جس ٹیب میں چل رہا ہے اسے منتخب کرنے کے لیے GaugeZ آپ کے Terminal کو اسکرپٹ کرتا ہے۔"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GaugeZ mở Terminal để khởi động Grok Build khi bạn chọn Mở Grok Build."
+            "value" : "GaugeZ điều khiển Terminal để khởi động Grok Build khi bạn chọn Mở Grok Build, và để chọn tab mà một phiên đang chạy khi bạn bấm vào phiên đó."
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "當你選擇「開啟 Grok Build」時，GaugeZ 會開啟「終端機」以啟動 Grok Build。"
+            "value" : "當你選擇「開啟 Grok Build」時，GaugeZ 會控制「終端機」啟動 Grok Build；當你點擊某個工作階段時，GaugeZ 會選取該工作階段所在的分頁。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "当你选择“打开 Grok Build”时，GaugeZ 会打开“终端”以启动 Grok Build。"
+            "value" : "当你选择“打开 Grok Build”时，GaugeZ 会控制“终端”启动 Grok Build；当你点击某个会话时，GaugeZ 会选中该会话所在的标签页。"
           }
         }
       }

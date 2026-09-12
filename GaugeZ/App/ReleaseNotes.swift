@@ -24,6 +24,22 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.13",
+            headline: "Limits tell you when they bite, and when they let go.",
+            changes: [
+                .init("A card when a limit is reached",
+                      "The rail opens and names the window. Dismiss it, or let it fold away."),
+                .init("A card when a limit resets",
+                      "Quota is back? The rail says so, before you notice on your own."),
+                .init("Sounds for limits",
+                      "Optional chimes for limits reached, limits reset, and the 20% alerts, in the new Settings → Notifications. Hear each one before you pick it."),
+                .init("Notifications can switch off",
+                      "One switch for the 20% and 0% notifications, beside the per-provider bells."),
+                .init("Click a session, land on its tab",
+                      "In Terminal, iTerm2, and cmux the session's own tab comes forward. Elsewhere, the app does.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.12",
             headline: "No more Keychain nagging, and room for a second Codex account.",
             changes: [

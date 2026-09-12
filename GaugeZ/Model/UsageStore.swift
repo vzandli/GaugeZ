@@ -132,12 +132,124 @@ final class UsageStore: ObservableObject {
     func previewChime(_ reason: SessionCompletionWatcher.Reason) {
         SessionChime.play(named: chime(for: reason))
     }
+
+    /// Chimes (per the pane's choices) and opens the rail on a limit transition, exactly
+    /// as a session completion does. The provider's detail card carries the banner.
+    ///
+    /// Events arrive in bursts — two windows of one provider turning over in a reading,
+    /// or every provider rolling over while the Mac slept — so a card that is already up
+    /// queues the newcomer rather than being overwritten before a frame is drawn.
+    private func announceUsageEvent(_ event: UsageEvent) {
+        let isReset = event.kind == .limitReset
+        guard isReset ? resetCardEnabled : limitCardEnabled else {
+            playUsageEventChime(for: event)
+            return
+        }
+        if usageEventPeek == nil {
+            showUsageEvent(event)
+        } else {
+            usageEventQueue.append(event)
+        }
+    }
+
+    private func playUsageEventChime(for event: UsageEvent) {
+        let isReset = event.kind == .limitReset
+        if isReset ? resetChimeEnabled : limitChimeEnabled {
+            SessionChime.play(named: isReset ? resetChime : limitChime)
+        }
+    }
+
+    private func showUsageEvent(_ event: UsageEvent) {
+        playUsageEventChime(for: event)
+        usageEventPeek = event
+        usageEventPeekTask?.cancel()
+        usageEventPeekTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled, let self else { return }
+            if self.usageEventQueue.isEmpty {
+                self.usageEventPeek = nil
+            } else {
+                self.showUsageEvent(self.usageEventQueue.removeFirst())
+            }
+        }
+    }
+
+    /// The banner's button: the user has seen enough, so the queue goes too.
+    func dismissUsageEvent() {
+        usageEventPeekTask?.cancel()
+        usageEventQueue.removeAll()
+        usageEventPeek = nil
+    }
+
+    /// Settings previews: shows the card and plays the chime exactly as the real event would,
+    /// on the provider's own headline window but at the reading the event describes — the
+    /// live reading may be the opposite of what the button demonstrates.
+    func previewUsageEvent(_ kind: UsageEventKind) {
+        let provider = visibleProviders.first ?? .claude
+        let live = snapshot(for: provider).headlineWindow
+        let resetsAt = live?.resetsAt.flatMap { $0 > .now ? $0 : nil } ?? .now.addingTimeInterval(90 * 60)
+        let window = UsageWindow(
+            id: live?.id ?? "preview",
+            label: live?.label ?? String(localized: "Preview window", bundle: .language),
+            usedPercent: kind == .limitReset ? 10 : 100,
+            resetsAt: resetsAt,
+            durationMinutes: live?.durationMinutes ?? 300)
+        // A preview button answers now: it replaces whatever card is up rather than queueing.
+        usageEventQueue.removeAll()
+        let event = UsageEvent(provider: provider, kind: kind, window: window)
+        if kind == .limitReset ? resetCardEnabled : limitCardEnabled {
+            showUsageEvent(event)
+        } else {
+            playUsageEventChime(for: event)
+        }
+    }
     @Published private(set) var completionPeek: SessionCompletionWatcher.Event?
     private var completionPeekTask: Task<Void, Never>?
     private var isErasing = false
     let sessionCompletions = PassthroughSubject<SessionCompletionWatcher.Event, Never>()
     private var completionWatcher = SessionCompletionWatcher()
     private var thresholdNotifier = ThresholdNotifier()
+
+    // MARK: Limit events (reset / reached)
+
+    /// System notifications at 20% and 0% remaining, globally. Per-provider mute lives in
+    /// Settings → Providers.
+    @Published var thresholdNotificationsEnabled = UserDefaults.standard.object(forKey: "thresholdNotificationsEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(thresholdNotificationsEnabled, forKey: "thresholdNotificationsEnabled") }
+    }
+    /// Chime played when a threshold notification is delivered.
+    @Published var alertChimeEnabled = UserDefaults.standard.object(forKey: "alertChimeEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(alertChimeEnabled, forKey: "alertChimeEnabled") }
+    }
+    @Published var alertChime = UserDefaults.standard.string(forKey: "alertChime") ?? "Sosumi" {
+        didSet { UserDefaults.standard.set(alertChime, forKey: "alertChime") }
+    }
+    /// Rail card when a limit window rolls over and quota is back.
+    @Published var resetCardEnabled = UserDefaults.standard.object(forKey: "usageResetCardEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(resetCardEnabled, forKey: "usageResetCardEnabled") }
+    }
+    @Published var resetChimeEnabled = UserDefaults.standard.object(forKey: "usageResetChimeEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(resetChimeEnabled, forKey: "usageResetChimeEnabled") }
+    }
+    @Published var resetChime = UserDefaults.standard.string(forKey: "usageResetChime") ?? "Glass" {
+        didSet { UserDefaults.standard.set(resetChime, forKey: "usageResetChime") }
+    }
+    /// Rail card when a window reaches zero remaining.
+    @Published var limitCardEnabled = UserDefaults.standard.object(forKey: "usageLimitCardEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(limitCardEnabled, forKey: "usageLimitCardEnabled") }
+    }
+    @Published var limitChimeEnabled = UserDefaults.standard.object(forKey: "usageLimitChimeEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(limitChimeEnabled, forKey: "usageLimitChimeEnabled") }
+    }
+    @Published var limitChime = UserDefaults.standard.string(forKey: "usageLimitChime") ?? "Basso" {
+        didSet { UserDefaults.standard.set(limitChime, forKey: "usageLimitChime") }
+    }
+    /// The limit event the rail is currently announcing, cleared by its own timer or the
+    /// banner's dismiss button. The panels observe it to peek the rail open.
+    @Published private(set) var usageEventPeek: UsageEvent?
+    private var usageEventPeekTask: Task<Void, Never>?
+    private var usageEventQueue: [UsageEvent] = []
+    private var eventWatcher = UsageEventWatcher()
     @Published private(set) var sessions: [ActivitySession] = []
     @Published private(set) var refreshing: Set<ProviderID> = []
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -185,6 +297,8 @@ final class UsageStore: ObservableObject {
         periodicTask?.cancel()
         activityTask?.cancel()
         completionPeekTask?.cancel()
+        usageEventPeekTask?.cancel()
+        usageEventQueue.removeAll()
         ThresholdAlerts.shared.cancel()
         for task in refreshTasks.values { task.cancel() }
         for task in delayedRefreshes.values { task.cancel() }
@@ -307,6 +421,7 @@ final class UsageStore: ObservableObject {
         actionErrors[provider] = nil
         // The next reading after a forget or re-enable is a fresh fact, so it may alert again.
         thresholdNotifier.forget(provider)
+        eventWatcher.forget(provider)
         SnapshotCache.save(Array(snapshots.values))
     }
 
@@ -624,7 +739,14 @@ final class UsageStore: ObservableObject {
                 snapshots[provider] = snapshot
             }
             let alerts = thresholdNotifier.observe(self.snapshot(for: provider), muted: mutedAlertProviders.contains(provider.rawValue))
-            ThresholdAlerts.shared.deliver(alerts)
+            if thresholdNotificationsEnabled {
+                ThresholdAlerts.shared.deliver(alerts)
+                if alertChimeEnabled, !alerts.isEmpty { SessionChime.play(named: alertChime) }
+            }
+            // Fed every reading, muted or not: skipping one would blind the difference
+            // engine to the transition that happened while it looked away.
+            let events = eventWatcher.observe(self.snapshot(for: provider), muted: mutedAlertProviders.contains(provider.rawValue))
+            for event in events { announceUsageEvent(event) }
             SnapshotCache.save(Array(snapshots.values))
         } catch is CancellationError {
             return

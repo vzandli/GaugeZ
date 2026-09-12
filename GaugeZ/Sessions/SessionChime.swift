@@ -26,16 +26,31 @@ enum SessionChime {
 
 @MainActor
 enum SessionFocus {
+    /// Raises the session's app inside the click, then selects its terminal tab where the
+    /// terminal offers a way to name it (Terminal.app, iTerm2, and cmux answer through
+    /// their scripting interfaces). The tab selection runs afterwards on its own thread:
+    /// it scripts a subprocess that can sit on an Automation consent prompt, and the
+    /// activation must stay tied to the user's gesture rather than wait behind it.
     @discardableResult
     static func activate(_ session: ActivitySession) -> Bool {
         if var pid = session.pid {
             // Refuse a PID recycled since the activity reader saw it.
             if let start = session.processStartedAt, ActivityReader.processStart(pid) != start { return false }
+            let agentPID = pid
             var seen: Set<pid_t> = []
             for _ in 0..<16 {
                 guard pid > 1, seen.insert(pid).inserted else { break }
-                if let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier != nil {
-                    return app.activate()
+                if let app = NSRunningApplication(processIdentifier: pid), let bundleID = app.bundleIdentifier {
+                    let raised = app.activate()
+                    if TerminalTabFocus.supports(bundleID) {
+                        // The facts the script needs are cheap sysctl reads, taken here.
+                        let tty = TerminalTabFocus.tty(of: agentPID)
+                        let cwd = TerminalTabFocus.currentDirectory(of: agentPID)
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            _ = TerminalTabFocus.selectTab(bundleID: bundleID, pid: agentPID, tty: tty, cwd: cwd)
+                        }
+                    }
+                    return raised
                 }
                 var info = kinfo_proc()
                 var size = MemoryLayout<kinfo_proc>.stride

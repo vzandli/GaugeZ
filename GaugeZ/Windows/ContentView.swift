@@ -2,6 +2,7 @@ import SwiftUI
 
 private enum SettingsDestination: String, CaseIterable, Identifiable {
     case general = "General"
+    case notifications = "Notifications"
     case providers = "Providers"
     case appearance = "Appearance"
     case diagnostics = "Diagnostics"
@@ -12,6 +13,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
     var title: LocalizedStringKey {
         switch self {
         case .general: "General"
+        case .notifications: "Notifications"
         case .providers: "Providers"
         case .appearance: "Appearance"
         case .diagnostics: "Diagnostics"
@@ -22,6 +24,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .general: "gearshape.fill"
+        case .notifications: "bell.badge.fill"
         case .providers: "square.stack.3d.up.fill"
         case .appearance: "paintbrush.pointed.fill"
         case .diagnostics: "waveform.path.ecg"
@@ -63,6 +66,8 @@ struct SettingsView: View {
                 switch destination {
                 case .general:
                     GeneralSettingsPage(store: store)
+                case .notifications:
+                    NotificationsSettingsPage(store: store)
                 case .providers:
                     ProvidersSettingsPage(store: store)
                 case .appearance:
@@ -527,12 +532,107 @@ private struct GeneralSettingsPage: View {
                 }
                 if store.sessionChimeEnabled {
                     SettingsRowDivider()
-                    ChimePickerRow(title: "Finished work", subtitle: "Plays when a session completes a turn", selection: $store.finishedChime) {
+                    ChimePickerRow(title: "Finished work", subtitle: "Plays when a session completes a turn", selection: $store.finishedChime, enabled: store.activityEnabled) {
                         store.previewChime(.finished)
                     }
                     SettingsRowDivider()
-                    ChimePickerRow(title: "Needs input", subtitle: "Plays when a session is waiting on you", selection: $store.waitingChime) {
+                    ChimePickerRow(title: "Needs input", subtitle: "Plays when a session is waiting on you", selection: $store.waitingChime, enabled: store.activityEnabled) {
                         store.previewChime(.blocked)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What GaugeZ says about limits: system threshold notifications, and the rail cards and
+/// chimes for the two limit transitions — a window reaching zero, and one rolling over.
+private struct NotificationsSettingsPage: View {
+    @ObservedObject var store: UsageStore
+
+    var body: some View {
+        SettingsPageContainer {
+            SettingsPageHeader(
+                eyebrow: "ALERTS",
+                title: "Notifications",
+                subtitle: "What GaugeZ tells you when limits move."
+            )
+
+            SettingsGroup("Threshold alerts") {
+                SettingsControlRow(
+                    title: "System notifications",
+                    subtitle: "A notification when a provider crosses 20% remaining, and again at 0%, once per crossing. Mute a provider from its row in Settings → Providers."
+                ) {
+                    Toggle("System notifications", isOn: $store.thresholdNotificationsEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Alert sound", subtitle: "Chime when a threshold notification is sent") {
+                    Toggle("Alert sound", isOn: $store.alertChimeEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                if store.alertChimeEnabled {
+                    SettingsRowDivider()
+                    ChimePickerRow(title: "Alert sound", subtitle: "Plays with every threshold notification", selection: $store.alertChime) {
+                        SessionChime.play(named: store.alertChime)
+                    }
+                }
+            }
+
+            SettingsGroup("When a limit is reached") {
+                SettingsControlRow(
+                    title: "Show on the rail",
+                    subtitle: "Open the rail for six seconds when a window reaches 0% remaining"
+                ) {
+                    Toggle("Show a card on the rail", isOn: $store.limitCardEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Play a sound", subtitle: "Chime when a limit is reached") {
+                    Toggle("Limit reached sound", isOn: $store.limitChimeEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                if store.limitChimeEnabled {
+                    SettingsRowDivider()
+                    ChimePickerRow(title: "Limit reached sound", subtitle: "Plays when a limit is reached", selection: $store.limitChime) {
+                        SessionChime.play(named: store.limitChime)
+                    }
+                }
+            }
+
+            SettingsGroup("When a limit resets") {
+                SettingsControlRow(
+                    title: "Show on the rail",
+                    subtitle: "Open the rail for six seconds when a window rolls over and quota is back"
+                ) {
+                    Toggle("Show a card on the rail", isOn: $store.resetCardEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Play a sound", subtitle: "Chime when a limit resets") {
+                    Toggle("Limit reset sound", isOn: $store.resetChimeEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                if store.resetChimeEnabled {
+                    SettingsRowDivider()
+                    ChimePickerRow(title: "Limit reset sound", subtitle: "Plays when a limit resets", selection: $store.resetChime) {
+                        SessionChime.play(named: store.resetChime)
+                    }
+                }
+            }
+
+            SettingsGroup("Preview") {
+                SettingsControlRow(
+                    title: "Try it",
+                    subtitle: "Shows the rail card and plays the chime exactly as the real event would"
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Limit reached") { store.previewUsageEvent(.limitReached) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        Button("Limit reset") { store.previewUsageEvent(.limitReset) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                     }
                 }
             }
@@ -542,10 +642,10 @@ private struct GeneralSettingsPage: View {
 
 /// A system-sound menu with a play button beside it, so a pick can be heard before it fires for real.
 private struct ChimePickerRow: View {
-    @EnvironmentObject private var store: UsageStore
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey
     @Binding var selection: String
+    var enabled: Bool = true
     let preview: () -> Void
 
     var body: some View {
@@ -567,7 +667,7 @@ private struct ChimePickerRow: View {
                 .help(Text("Play \(selection)"))
                 .accessibilityLabel(String.localizedStringWithFormat(String(localized: "Play %@", bundle: .language), selection))
             }
-            .disabled(!store.activityEnabled)
+            .disabled(!enabled)
         }
         .padding(.leading, 16)
     }

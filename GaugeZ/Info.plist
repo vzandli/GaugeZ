@@ -25,7 +25,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>GaugeZ opens Terminal to start Grok Build when you choose Open Grok Build.</string>
+	<string>GaugeZ scripts your terminal to start Grok Build when you choose Open Grok Build, and to select the tab a session runs in when you click it.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
