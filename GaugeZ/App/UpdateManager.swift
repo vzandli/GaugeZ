@@ -6,6 +6,32 @@ import Sparkle
 final class UpdateManager: ObservableObject {
     let updaterController: SPUStandardUpdaterController
     private let reminders = GentleUpdateReminders()
+    private let outcomes = UpdateOutcomeReporter()
+
+    /// What the last check actually found, so Settings can say so instead of going quiet.
+    enum Outcome: Equatable {
+        case idle
+        case checking
+        case upToDate(Date)
+        case found(String)
+        case unreachable
+        case failed
+
+        var message: String? {
+            switch self {
+            case .idle: nil
+            case .checking: String(localized: "Checking…", bundle: .language)
+            case .upToDate(let date):
+                String.localizedStringWithFormat(String(localized: "Up to date · checked %@", bundle: .language),
+                                                 date.formatted(date: .omitted, time: .shortened))
+            case .found(let version): String.localizedStringWithFormat(String(localized: "Version %@ is available", bundle: .language), version)
+            case .unreachable: String(localized: "The update server could not be reached.", bundle: .language)
+            case .failed: String(localized: "The update check failed.", bundle: .language)
+            }
+        }
+    }
+
+    @Published private(set) var outcome: Outcome = .idle
     private var canCheckObservation: NSKeyValueObservation?
 
     @Published var automaticallyChecksForUpdates: Bool {
@@ -29,7 +55,7 @@ final class UpdateManager: ObservableObject {
     init() {
         let controller = SPUStandardUpdaterController(
             startingUpdater: false,
-            updaterDelegate: nil,
+            updaterDelegate: outcomes,
             userDriverDelegate: reminders
         )
         updaterController = controller
@@ -37,6 +63,7 @@ final class UpdateManager: ObservableObject {
         reminders.onPendingUpdateChange = { [weak self] version in
             self?.pendingUpdateVersion = version
         }
+        outcomes.onOutcome = { [weak self] outcome in self?.outcome = outcome }
         canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) {
             [weak self] updater, _ in
             Task { @MainActor [weak self] in
@@ -55,6 +82,7 @@ final class UpdateManager: ObservableObject {
     }
 
     func checkForUpdates() {
+        outcome = .checking
         updaterController.checkForUpdates(nil)
     }
 }
@@ -87,5 +115,33 @@ private final class GentleUpdateReminders: NSObject, SPUStandardUserDriverDelega
 
     private func notify(_ version: String?) {
         MainActor.assumeIsolated { onPendingUpdateChange?(version) }
+    }
+}
+
+/// Turns the end of a Sparkle update cycle into an `UpdateManager.Outcome`.
+private final class UpdateOutcomeReporter: NSObject, SPUUpdaterDelegate {
+    var onOutcome: (@MainActor (UpdateManager.Outcome) -> Void)?
+    private var foundVersion: String?
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        foundVersion = item.displayVersionString
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        let outcome: UpdateManager.Outcome
+        let code = (error as NSError?).flatMap { $0.domain == SUSparkleErrorDomain ? $0.code : nil }
+        if let foundVersion {
+            outcome = .found(foundVersion)
+        } else if error == nil || code == Int(SUError.noUpdateError.rawValue) {
+            outcome = .upToDate(.now)
+        } else if code == Int(SUError.installationCanceledError.rawValue) {
+            outcome = .idle
+        } else if code == Int(SUError.downloadError.rawValue) || code == Int(SUError.appcastError.rawValue) || (error as NSError?)?.domain == NSURLErrorDomain {
+            outcome = .unreachable
+        } else {
+            outcome = .failed
+        }
+        foundVersion = nil
+        DispatchQueue.main.async { [onOutcome] in MainActor.assumeIsolated { onOutcome?(outcome) } }
     }
 }

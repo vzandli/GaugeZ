@@ -300,7 +300,42 @@ extension AppDelegate: NSMenuDelegate {
         syncMenuState(menu)
     }
 
+    /// Marks the per-provider usage lines, which are rebuilt every time the menu opens.
+    private static let usageLineTag = 900
+
+    /// One line per provider at the top of the menu: the headline reading, or why there is none.
+    /// Clicking a line refetches that provider.
+    private func rebuildUsageLines(in menu: NSMenu) {
+        for item in menu.items where item.tag == Self.usageLineTag { menu.removeItem(item) }
+        var index = 0
+        for provider in store.visibleProviders {
+            let snapshot = store.snapshot(for: provider)
+            let reading: String
+            if let window = snapshot.headlineWindow {
+                reading = String.localizedStringWithFormat(String(localized: "%1$@%% left · %2$@", bundle: .language),
+                                                           PercentCopy.text(window.remainingPercent), window.label)
+            } else {
+                reading = snapshot.health.shortLabel
+            }
+            let item = NSMenuItem(title: "\(provider.displayName) — \(reading)", action: #selector(refreshProvider(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Self.usageLineTag
+            item.representedObject = provider.rawValue
+            item.toolTip = snapshot.headlineWindow?.resetsAt.map {
+                String.localizedStringWithFormat(String(localized: "Resets %@", bundle: .language), ResetCopy.absolute($0))
+            }
+            menu.insertItem(item, at: index)
+            index += 1
+        }
+        if index > 0 {
+            let separator = NSMenuItem.separator()
+            separator.tag = Self.usageLineTag
+            menu.insertItem(separator, at: index)
+        }
+    }
+
     private func syncMenuState(_ menu: NSMenu) {
+        rebuildUsageLines(in: menu)
         if let submenu = menu.items.first(where: { $0.submenu != nil })?.submenu {
             submenu.removeAllItems()
             for provider in store.visibleProviders {
@@ -311,7 +346,7 @@ extension AppDelegate: NSMenuDelegate {
             }
             submenu.autoenablesItems = false
         }
-        if let toggleItem = menu.items.first {
+        if let toggleItem = menu.items.first(where: { $0.action == #selector(toggleNotch) }) {
             let isExpanded = edgePanelControllers.contains(where: \.isExpanded)
             toggleItem.title = isExpanded ? String(localized: "Hide GaugeZ", bundle: .language) : String(localized: "Show GaugeZ", bundle: .language)
         }

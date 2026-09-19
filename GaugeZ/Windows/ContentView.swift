@@ -133,6 +133,15 @@ private struct UpdatesSettingsPage: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!updateManager.canCheckForUpdates)
                 }
+
+                if let message = updateManager.outcome.message {
+                    SettingsRowDivider()
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsPalette.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 10)
+                }
             }
             .padding(.horizontal, 18)
             .settingsCard()
@@ -344,8 +353,10 @@ private struct ProviderSettingsRow: View {
     let canMoveDown: Bool
     let move: (Int) -> Void
     let openProvider: () -> Void
+    @EnvironmentObject private var store: UsageStore
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 10) {
             ProviderLogo(provider: provider, size: 20)
                 .frame(width: 38, height: 38)
@@ -412,7 +423,7 @@ private struct ProviderSettingsRow: View {
                 Toggle("Usage alerts for \(provider.displayName)", isOn: $alertsEnabled)
                     .labelsHidden()
                     .toggleStyle(SettingsPalette.smallToggle)
-                    .help("Notify at 20% and 0% remaining")
+                    .help("Notify at the warning and critical levels")
                     .disabled(!enabled)
             }
             .padding(.trailing, 6)
@@ -429,6 +440,10 @@ private struct ProviderSettingsRow: View {
                 .toggleStyle(SettingsPalette.toggle)
                 .controlSize(.small)
             }
+            if enabled, provider.needsSetup {
+                ProviderSetupRow(provider: provider, store: store)
+            }
+        }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
@@ -519,15 +534,27 @@ private struct GeneralSettingsPage: View {
             }
 
             SettingsGroup("Sessions") {
-                SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local data. Claude may read a bounded transcript tail when status is missing; transcript text stays on this Mac. Codex and Antigravity states are inferred from recent writes.") {
+                SettingsControlRow(title: "Session activity", subtitle: "Show Claude Code, Cursor, Grok Build, Codex, and Antigravity session states from local data. Claude may read a bounded transcript tail when status is missing; transcript text stays on this Mac. Antigravity and the Codex desktop app are inferred from recent writes.") {
                     Toggle("Show session activity", isOn: $store.activityEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle)
                 }
                 SettingsRowDivider()
-                SettingsControlRow(title: "Session peek", subtitle: "Open the rail for five seconds when work finishes or needs input. Click its provider to raise the owning app.") {
+                SettingsControlRow(title: "Session peek", subtitle: "Open the rail when work finishes or needs input. Click its provider to raise the owning app.") {
                     Toggle("Session peek", isOn: $store.sessionPeekEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
                 }
+                if store.sessionPeekEnabled {
+                    SettingsRowDivider()
+                    SettingsControlRow(title: "Peek duration", subtitle: "How long the rail stays open") {
+                        Picker("Peek duration", selection: $store.sessionPeekSeconds) {
+                            ForEach([3.0, 5.0, 8.0, 12.0, 20.0], id: \.self) { seconds in
+                                Text(String.localizedStringWithFormat(String(localized: "%lld seconds", bundle: .language), Int64(seconds))).tag(seconds)
+                            }
+                        }
+                        .labelsHidden().frame(width: 130).disabled(!store.activityEnabled)
+                    }
+                    .padding(.leading, 16)
+                }
                 SettingsRowDivider()
-                SettingsControlRow(title: "Session sounds", subtitle: "Chime when a session finishes or needs input. Only reported sessions chime; inferred Codex and Antigravity activity never does.") {
+                SettingsControlRow(title: "Session sounds", subtitle: "Chime when a session finishes or needs input. Only reported sessions chime; inferred activity never does.") {
                     Toggle("Session sounds", isOn: $store.sessionChimeEnabled).labelsHidden().toggleStyle(SettingsPalette.toggle).disabled(!store.activityEnabled)
                 }
                 if store.sessionChimeEnabled {
@@ -561,10 +588,16 @@ private struct NotificationsSettingsPage: View {
             SettingsGroup("Threshold alerts") {
                 SettingsControlRow(
                     title: "System notifications",
-                    subtitle: "A notification when a provider crosses 20% remaining, and again at 0%, once per crossing. Mute a provider from its row in Settings → Providers."
+                    subtitle: "A notification when a provider crosses the warning level, and again at the critical one, once per crossing. Mute a provider from its row in Settings → Providers."
                 ) {
                     Toggle("System notifications", isOn: $store.thresholdNotificationsEnabled)
                         .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                if store.thresholdNotificationsEnabled {
+                    SettingsRowDivider()
+                    ThresholdSliderRow(title: "Warn at", value: $store.warnThreshold, range: 5...50)
+                    SettingsRowDivider()
+                    ThresholdSliderRow(title: "Critical at", value: $store.criticalThreshold, range: 0...min(15, store.warnThreshold))
                 }
                 SettingsRowDivider()
                 SettingsControlRow(title: "Alert sound", subtitle: "Chime when a threshold notification is sent") {
@@ -640,6 +673,71 @@ private struct NotificationsSettingsPage: View {
     }
 }
 
+/// The one thing GaugeZ cannot borrow for a provider: a pasted API key, or a budget to meter against.
+private struct ProviderSetupRow: View {
+    let provider: ProviderID
+    @ObservedObject var store: UsageStore
+    @State private var draft = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch provider.kind {
+            case .gemini:
+                Text("Monthly token budget")
+                    .font(.system(size: 11)).foregroundStyle(SettingsPalette.secondary)
+                TextField(value: $store.geminiMonthlyTokenBudget, format: .number.grouping(.never), prompt: Text(verbatim: "1000000")) { Text("Monthly token budget") }
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder).controlSize(.small).frame(width: 130)
+            default:
+                let saved = store.apiKeyRevision >= 0 && store.hasStoredAPIKey(for: provider)
+                SecureField(saved ? String(localized: "Key saved in Keychain", bundle: .language) : String(localized: "Paste API key", bundle: .language), text: $draft)
+                    .textFieldStyle(.roundedBorder).controlSize(.small).frame(maxWidth: 280)
+                    .onSubmit(save)
+                Button("Save", action: save)
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if saved {
+                    Button("Remove") { store.setAPIKey("", for: provider) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+                if provider.kind == .minimax {
+                    Picker("Region", selection: $store.minimaxRegion) {
+                        ForEach(MiniMaxRegion.allCases) { region in Text(region.label).tag(region) }
+                    }
+                    .labelsHidden().controlSize(.small).frame(width: 110)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 48)
+    }
+
+    private func save() {
+        guard store.setAPIKey(draft, for: provider) else { return }
+        draft = ""
+    }
+}
+
+/// A percent-remaining level, in steps of five.
+private struct ThresholdSliderRow: View {
+    let title: LocalizedStringKey
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    var body: some View {
+        SettingsControlRow(title: title, subtitle: "Percent of the limit remaining") {
+            HStack(spacing: 10) {
+                Slider(value: $value, in: range, step: 5).frame(width: 140)
+                Text(String.localizedStringWithFormat(String(localized: "%lld%% left", bundle: .language), Int64(value)))
+                    .font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(SettingsPalette.primary)
+                    .frame(width: 62, alignment: .trailing)
+            }
+        }
+        .padding(.leading, 16)
+    }
+}
+
 /// A system-sound menu with a play button beside it, so a pick can be heard before it fires for real.
 private struct ChimePickerRow: View {
     let title: LocalizedStringKey
@@ -652,7 +750,7 @@ private struct ChimePickerRow: View {
         SettingsControlRow(title: title, subtitle: subtitle) {
             HStack(spacing: 8) {
                 Picker(title, selection: $selection) {
-                    ForEach(SessionChime.systemSounds, id: \.self) { Text($0).tag($0) }
+                    ForEach(SessionChime.availableSounds, id: \.self) { Text($0).tag($0) }
                 }
                 .labelsHidden()
                 .frame(width: 130)
@@ -705,7 +803,12 @@ private struct AppearanceSettingsPage: View {
                     .frame(width: 152)
                 }
                 SettingsRowDivider()
-                SettingsControlRow(title: "Screen edge", subtitle: "Anchor GaugeZ to any screen edge") {
+                SettingsControlRow(title: "Hide over full-screen apps", subtitle: "Step aside while a full-screen app owns the display") {
+                    Toggle("Hide over full-screen apps", isOn: $store.hideOverFullScreen)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Screen edge", subtitle: "Anchor GaugeZ to any screen edge, or drag the rail's handle to one") {
                     Picker("Screen edge", selection: $store.edgeSide) {
                         ForEach(EdgeSide.allCases) { edge in
                             Text(edge.label).tag(edge)
@@ -735,6 +838,25 @@ private struct AppearanceSettingsPage: View {
                         .controlSize(.small)
                         .disabled(abs(store.verticalPosition - 0.5) < 0.005)
                     }
+                }
+            }
+
+            SettingsGroup("Usage cards") {
+                SettingsControlRow(title: "Usage pace", subtitle: "Compare what is used with how much of the window has passed") {
+                    Toggle("Usage pace", isOn: $store.usagePaceEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Claude daily pace", subtitle: "Lead Claude with a daily budget: a seventh of the weekly limit per day") {
+                    Toggle("Claude daily pace", isOn: $store.claudeDailyPaceEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Reset times", subtitle: "How a window's reset is written") {
+                    Picker("Reset times", selection: $store.resetTimeStyle) {
+                        ForEach(ResetTimeStyle.allCases) { style in Text(style.label).tag(style) }
+                    }
+                    .labelsHidden().frame(width: 170)
                 }
             }
 

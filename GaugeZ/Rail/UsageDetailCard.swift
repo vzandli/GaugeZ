@@ -67,7 +67,7 @@ struct UsageDetailCard: View {
                     get: { store.headlineWindows[snapshot.provider.rawValue] ?? "" },
                     set: { store.headlineWindows[snapshot.provider.rawValue] = $0.isEmpty ? nil : $0 }
                 )) {
-                    if let defaultID = store.snapshots[snapshot.provider]?.headlineWindowID,
+                    if let defaultID = store.defaultHeadlineID(for: snapshot.provider),
                        let window = snapshot.windows.first(where: { $0.id == defaultID }) {
                         Text("Default: \(window.label)").tag("")
                     } else {
@@ -124,7 +124,7 @@ struct UsageDetailCard: View {
                                     .font(.system(size: 12, weight: .medium))
                                     .lineLimit(1)
                                 Spacer(minLength: 8)
-                                if let reset = window.resetsAt {
+                                if let reset = window.resetsAt, store.resetTimeStyle != .countdown {
                                     Text("Resets \(Self.absoluteReset(reset))")
                                         .font(.caption2)
                                         .foregroundStyle(.white.opacity(0.55))
@@ -139,15 +139,25 @@ struct UsageDetailCard: View {
                                     .font(.caption2.weight(.semibold))
                                     .monospacedDigit()
                                 Spacer()
-                                if let reset = window.resetsAt, reset > .now {
+                                if let reset = window.resetsAt, reset > .now, store.resetTimeStyle != .clock {
                                     Text("in \(Self.relativeReset(reset))")
                                         .font(.caption2)
                                         .foregroundStyle(.white.opacity(0.4))
                                 }
                             }
+
+                            if store.usagePaceEnabled, let pace = window.pace(now: store.clock) {
+                                Label(pace.summary, systemImage: pace.isOver ? "hare.fill" : "tortoise.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(pace.isOver ? Color.orange : .white.opacity(0.55))
+                            }
                         }
                     }
                 }
+            }
+
+            if let daily = snapshot.dailyTokens {
+                DailyTokenChart(buckets: DailyTokenBucket.recent(daily, now: store.clock))
             }
 
             if let cost = snapshot.costInfo {
@@ -282,6 +292,7 @@ struct UsageDetailCard: View {
             ? String.localizedStringWithFormat(String(localized: "%@ (inferred)", bundle: .language), session.state.localizedLabel)
             : session.state.localizedLabel
         var parts = [stateText, session.project]
+        if let surface = SessionFocus.surfaceName(of: session), surface != session.project { parts.append(surface) }
         if let since = session.since, session.state != .unknown {
             parts.append(ElapsedCopy.text(since: since, now: now))
         }
@@ -335,6 +346,36 @@ private struct UsageBar: View {
     }
 
     private var color: Color { .quota(remainingPercent: remainingPercent) }
+}
+
+/// Thirty days of token use as bars, today on the right.
+private struct DailyTokenChart: View {
+    let buckets: [DailyTokenBucket]
+
+    var body: some View {
+        let peak = max(1, buckets.map(\.tokens).max() ?? 1)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Last 30 days").font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text(String.localizedStringWithFormat(String(localized: "%@ tokens today", bundle: .language),
+                                                      DailyTokenBucket.compact(buckets.last?.tokens ?? 0)))
+                    .font(.caption2).foregroundStyle(.white.opacity(0.55)).monospacedDigit()
+            }
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(buckets) { bucket in
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(.white.opacity(bucket.id == buckets.last?.id ? 0.9 : 0.35))
+                        .frame(height: max(1.5, 28 * CGFloat(bucket.tokens) / CGFloat(peak)))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 28, alignment: .bottom)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String.localizedStringWithFormat(String(localized: "%@ tokens today", bundle: .language),
+                                                             DailyTokenBucket.compact(buckets.last?.tokens ?? 0)))
+    }
 }
 
 /// The card's announcement of a limit transition, shown while the store holds the event peek

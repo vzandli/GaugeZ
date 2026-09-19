@@ -114,12 +114,21 @@ actor CodexUsageProvider: UsageProviding {
 
     private func attachingResetCredits(_ snapshot: UsageSnapshot, credential: CodexWebCredential?) async -> UsageSnapshot {
         guard let credential else { return snapshot }
-        let credits = await Self.fetchResetCredits(session: session, credential: credential)
-        return snapshot.withResetCredits(credits)
+        var result = snapshot.withResetCredits(await Self.fetchResetCredits(session: session, credential: credential))
+        result.dailyTokens = await Self.fetchDailyTokens(session: session, credential: credential)
+        return result
     }
 
-    private static func fetchResetCredits(session: URLSession, credential: CodexWebCredential) async -> CodexResetCredits? {
-        var request = URLRequest(url: CodexWebUsage.resetCreditsEndpoint)
+    /// Best effort, like the reset credits: the chart is an extra, never a reason to fail a reading.
+    private static func fetchDailyTokens(session: URLSession, credential: CodexWebCredential) async -> [DailyTokenBucket]? {
+        let request = authorizedRequest(CodexWebUsage.profileEndpoint, credential: credential)
+        guard let (data, response) = try? await session.data(for: request),
+              (200..<300).contains((response as? HTTPURLResponse)?.statusCode ?? 0) else { return nil }
+        return CodexWebUsage.dailyTokens(from: data)
+    }
+
+    private static func authorizedRequest(_ url: URL, credential: CodexWebCredential) -> URLRequest {
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
@@ -129,6 +138,11 @@ actor CodexUsageProvider: UsageProviding {
         request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
         request.setValue("GaugeZ/\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
+        return request
+    }
+
+    private static func fetchResetCredits(session: URLSession, credential: CodexWebCredential) async -> CodexResetCredits? {
+        let request = authorizedRequest(CodexWebUsage.resetCreditsEndpoint, credential: credential)
         do {
             let (data, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -256,11 +270,26 @@ struct CodexWebCredential: Sendable {
     }
 }
 
-/// `GET https://chatgpt.com/backend-api/wham/usage`: the account's main windows only.
-/// `additional_rate_limits` and `code_review_rate_limit` meter something else and are left out.
+/// `GET https://chatgpt.com/backend-api/wham/usage`: the account's main windows, then the
+/// Spark and code-review limits as extras — listed on the card, never the rail's headline.
 enum CodexWebUsage {
     static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     static let resetCreditsEndpoint = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
+    static let profileEndpoint = URL(string: "https://chatgpt.com/backend-api/wham/profiles/me")!
+
+    /// `stats.daily_usage_buckets` of the profile endpoint: `[{"start_date":"2026-09-01","tokens":1234}]`.
+    /// Nil when the body carries no buckets, so the card simply draws no chart.
+    static func dailyTokens(from data: Data) -> [DailyTokenBucket]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stats = root["stats"] as? [String: Any],
+              let raw = stats["daily_usage_buckets"] as? [[String: Any]] else { return nil }
+        let buckets = raw.prefix(400).compactMap { entry -> DailyTokenBucket? in
+            guard let day = entry["start_date"] as? String, day.count >= 10,
+                  let tokens = (entry["tokens"] as? NSNumber)?.intValue, tokens >= 0 else { return nil }
+            return DailyTokenBucket(day: day, tokens: tokens)
+        }
+        return buckets.isEmpty ? nil : buckets
+    }
 
     static func windows(from data: Data, now: Date = .now) throws -> [UsageWindow] {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -269,28 +298,53 @@ enum CodexWebUsage {
         guard let limit = object["rate_limit"] as? [String: Any] else { throw CodexProviderError.noUsageWindows }
         var windows: [UsageWindow] = []
         for (id, fallback) in [("primary", String(localized: "Current limit", bundle: .language)), ("secondary", String(localized: "Weekly limit", bundle: .language))] {
-            guard let window = limit["\(id)_window"] as? [String: Any] else { continue }
-            guard let percent = (window["used_percent"] as? NSNumber)?.doubleValue, percent.isFinite else {
+            guard let raw = limit["\(id)_window"] as? [String: Any] else { continue }
+            guard let window = window(id: id, from: raw, fallback: fallback, now: now) else {
                 throw CodexProviderError.malformedResponse
             }
-            let seconds = (window["limit_window_seconds"] as? NSNumber)?.doubleValue
-            let minutes = seconds.flatMap { $0.isFinite && $0 > 0 ? Int(($0 / 60).rounded()) : nil }
-            var resetsAt: Date?
-            if let epoch = (window["reset_at"] as? NSNumber)?.doubleValue, epoch.isFinite, epoch > 0 {
-                resetsAt = Date(timeIntervalSince1970: epoch)
-            } else if let after = (window["reset_after_seconds"] as? NSNumber)?.doubleValue, after.isFinite, after >= 0 {
-                resetsAt = now.addingTimeInterval(after)
-            }
-            windows.append(UsageWindow(
-                id: id,
-                label: CodexWindowLabel.label(minutes: minutes, fallback: fallback),
-                usedPercent: max(0, min(100, percent)),
-                resetsAt: resetsAt,
-                durationMinutes: minutes
-            ))
+            windows.append(window)
         }
         guard !windows.isEmpty else { throw CodexProviderError.noUsageWindows }
+
+        // Extras are best effort: a malformed one is dropped, never a reason to lose the main pair.
+        // Two Spark entries ("Spark" and a model-named one) must not emit the same ids twice.
+        let spark = (object["additional_rate_limits"] as? [[String: Any]] ?? []).first { entry in
+            [entry["limit_name"], entry["metered_feature"]].compactMap { $0 as? String }
+                .contains { $0.localizedCaseInsensitiveContains("spark") }
+        }
+        let extras: [(String, String, [String: Any]?)] = [
+            ("spark", "Spark", spark?["rate_limit"] as? [String: Any]),
+            ("code-review", String(localized: "Code review", bundle: .language), object["code_review_rate_limit"] as? [String: Any])
+        ]
+        for (id, group, limit) in extras {
+            for (suffix, key) in [("", "primary_window"), ("-secondary", "secondary_window")] {
+                guard let raw = limit?[key] as? [String: Any],
+                      let window = window(id: id + suffix, from: raw, fallback: "", group: group, now: now) else { continue }
+                windows.append(window)
+            }
+        }
         return windows
+    }
+
+    private static func window(id: String, from raw: [String: Any], fallback: String, group: String? = nil, now: Date) -> UsageWindow? {
+        guard let percent = (raw["used_percent"] as? NSNumber)?.doubleValue, percent.isFinite else { return nil }
+        let seconds = (raw["limit_window_seconds"] as? NSNumber)?.doubleValue
+        let minutes = seconds.flatMap { $0.isFinite && $0 > 0 ? Int(($0 / 60).rounded()) : nil }
+        var resetsAt: Date?
+        if let epoch = (raw["reset_at"] as? NSNumber)?.doubleValue, epoch.isFinite, epoch > 0 {
+            resetsAt = Date(timeIntervalSince1970: epoch)
+        } else if let after = (raw["reset_after_seconds"] as? NSNumber)?.doubleValue, after.isFinite, after >= 0 {
+            resetsAt = now.addingTimeInterval(after)
+        }
+        let label = CodexWindowLabel.label(minutes: minutes, fallback: fallback)
+        return UsageWindow(
+            id: id,
+            label: group.map { label.isEmpty ? $0 : "\($0) · \(label)" } ?? label,
+            usedPercent: max(0, min(100, percent)),
+            resetsAt: resetsAt,
+            durationMinutes: minutes,
+            isExtra: group != nil
+        )
     }
 
     /// `available_count` is trusted even when the `credits` array is truncated. An unfamiliar

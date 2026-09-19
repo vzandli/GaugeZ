@@ -39,6 +39,12 @@ final class EdgePanelController {
     private var dragStartScreenY: CGFloat = 0
     private var dragStartVerticalPosition: Double = 0.5
     private var lastSnapHaptic = false
+    /// The other edge a drag is currently reaching for; see `EdgeDropZone`.
+    private var dropTarget: EdgeSide?
+    private let dropOverlay = EdgeDropZoneOverlay()
+    /// The rail is ordered out because a full-screen app owns this display.
+    private var isFoldedForFullScreen = false
+    private var fullScreenTick = 0
 
     /// Debug aid: GAUGEZ_DEBUG_LOG=<file> mirrors hover events to a file.
     private func debugNote(_ message: String) {
@@ -86,7 +92,13 @@ final class EdgePanelController {
     /// rail, so it asks: the visible frame is compared on a timer and on pointer movement.
     private func installUsableAreaWatch() {
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.followUsableAreaIfItMoved() }
+            MainActor.assumeIsolated {
+                self?.followUsableAreaIfItMoved()
+                // The window list is the costly half of this check, so it runs every fourth
+                // tick; app and Space changes re-run it at once (see `observeSettings`).
+                if let self, self.fullScreenTick % 4 == 0 { self.updateFullScreenFold() }
+                self?.fullScreenTick += 1
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         usableAreaTimer = timer
@@ -96,6 +108,20 @@ final class EdgePanelController {
         guard !isDragging, let frame = preferredScreen?.visibleFrame, frame != lastUsableArea else { return }
         debugNote("usable area moved to \(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))")
         positionPanel(animated: false)
+    }
+
+    /// Steps out of the way of a full-screen app on this display, and comes back with the Space.
+    private func updateFullScreenFold() {
+        let fold = store.hideOverFullScreen && store.displayMode != .hidden && !isDragging
+            && preferredScreen.map(FullScreenDetector.isFullScreenAppFrontmost(on:)) == true
+        guard fold != isFoldedForFullScreen else { return }
+        isFoldedForFullScreen = fold
+        debugNote("full-screen fold \(fold)")
+        if fold {
+            panel.orderOut(nil)
+        } else if store.displayMode != .hidden {
+            panel.orderFrontRegardless()
+        }
     }
 
     // MARK: - Pointer routing
@@ -278,7 +304,7 @@ final class EdgePanelController {
     }
 
     func show() {
-        guard store.displayMode != .hidden else { return }
+        guard store.displayMode != .hidden, !isFoldedForFullScreen else { return }
         positionPanel(animated: false)
         panel.orderFrontRegardless()
     }
@@ -292,6 +318,7 @@ final class EdgePanelController {
         for monitor in pointerMonitors { NSEvent.removeMonitor(monitor) }
         pointerMonitors.removeAll()
         usableAreaTimer?.invalidate()
+        dropOverlay.hide()
         panel.close()
     }
 
@@ -316,7 +343,7 @@ final class EdgePanelController {
         }
         // Only a card that actually opens holds the rail: a peek refused for a pinned card,
         // open settings, or a hidden rail must not block the next collapse.
-        guard !isDragging, store.displayMode != .hidden, state.attachment != .settings, !isAttachmentPinned else { return }
+        guard !isDragging, store.displayMode != .hidden, !isFoldedForFullScreen, state.attachment != .settings, !isAttachmentPinned else { return }
         usageEventHoldOpen = true
         // A session peek in progress hands over: its timer was the only thing clearing
         // `peekEvent`, so the event goes with it or the rail never folds again.
@@ -332,7 +359,7 @@ final class EdgePanelController {
     }
 
     private func peek(_ event: SessionCompletionWatcher.Event) {
-        guard store.displayMode != .hidden, state.attachment != .settings, !isAttachmentPinned, !isDragging else { return }
+        guard store.displayMode != .hidden, !isFoldedForFullScreen, state.attachment != .settings, !isAttachmentPinned, !isDragging else { return }
         usageEventHoldOpen = false
         peekTask?.cancel()
         collapseTask?.cancel()
@@ -344,7 +371,7 @@ final class EdgePanelController {
         setExpanded(true)
         setAttachment(.detail(event.session.provider))
         peekTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(self?.store.sessionPeekSeconds ?? 5))
             guard !Task.isCancelled, let self else { return }
             self.peekEvent = nil
             if !self.pointerIsOverVisibleContent, !self.isAttachmentPinned {
@@ -496,6 +523,15 @@ final class EdgePanelController {
                 }
             }
             .store(in: &cancellables)
+
+        store.$hideOverFullScreen.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateFullScreenFold() }.store(in: &cancellables)
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+            // A full-screen transition animates; the window list settles a moment after the notice.
+            workspace.publisher(for: name).delay(for: .milliseconds(700), scheduler: DispatchQueue.main)
+                .sink { [weak self] _ in self?.updateFullScreenFold() }.store(in: &cancellables)
+        }
 
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
@@ -652,10 +688,10 @@ final class EdgePanelController {
     private func applyDisplayMode(animated: Bool) {
         switch store.displayMode {
         case .always:
-            panel.orderFrontRegardless()
+            if !isFoldedForFullScreen { panel.orderFrontRegardless() }
             setExpanded(true, animated: animated)
         case .hover:
-            panel.orderFrontRegardless()
+            if !isFoldedForFullScreen { panel.orderFrontRegardless() }
             isPointerInRail = panel.frame.contains(NSEvent.mouseLocation)
             if !isPointerInRail {
                 isAttachmentPinned = false
@@ -790,11 +826,36 @@ final class EdgePanelController {
         let clamped = max(0.0, min(1.0, newRatio))
         store.verticalPosition = clamped
         positionPanel(animated: false)
+        updateDropTarget(on: screen)
+    }
+
+    private func updateDropTarget(on screen: NSScreen) {
+        let target = EdgeDropZone.target(pointer: NSEvent.mouseLocation, in: screen.visibleFrame, current: store.edgeSide)
+        guard target != dropTarget else { return }
+        dropTarget = target
+        if let target {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+            dropOverlay.show(target, on: screen, tint: NSColor(Color(hex: store.indicatorColorHex) ?? .accentColor))
+        } else {
+            dropOverlay.hide()
+        }
     }
 
     private func dragEnded() {
         debugNote("drag ended at \(store.verticalPosition)")
         isDragging = false
+        dropOverlay.hide()
+        if let target = dropTarget {
+            dropTarget = nil
+            // Land where the pointer let go, measured along the new edge.
+            if let frame = preferredScreen?.visibleFrame {
+                let pointer = NSEvent.mouseLocation
+                let ratio = target.isHorizontal ? (pointer.x - frame.minX) / max(1, frame.width) : (pointer.y - frame.minY) / max(1, frame.height)
+                store.verticalPosition = Double(ratio)
+            }
+            store.edgeSide = target
+            return
+        }
         routePointer()
     }
 

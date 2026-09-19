@@ -215,25 +215,58 @@ actor ActivityReader {
         return nil
     }
 
-    /// Codex publishes no status field. The CLI and VS Code extension append to a thread's rollout
-    /// log while a turn runs, and the desktop app updates its own thread catalogue; a write within
-    /// this window is a turn in flight. It cannot tell thinking from a turn that ended a second
-    /// ago, so it errs short, and the row is labeled as inferred.
+    /// Codex publishes no status field, but a CLI or VS Code rollout records each turn's start
+    /// and end, and those are read when the rollout is the newest evidence. Without them — the
+    /// desktop app keeps only a thread catalogue — a write within this window is a turn in
+    /// flight. That cannot tell thinking from a turn that ended a second ago, so it errs short,
+    /// and the row is labeled as inferred.
     static let codexStaleAfter: TimeInterval = 8
+    /// A started turn may sit quiet behind a long command. Past this, the CLI has likely died.
+    static let codexTurnQuietLimit: TimeInterval = 600
+    /// How long a completed turn stays visible to the completion watcher as idle.
+    static let codexFinishedFor: TimeInterval = 900
 
     func readCodexSessions(provider: ProviderID = .codex, codexHome: URL = ActivityReader.codexHome(), now: Date = .now, includeIdle: Bool = false) -> [ActivitySession] {
-        var candidates: [(id: String, name: String, at: Date)] = []
+        var candidates: [(id: String, name: String, at: Date, rollout: URL?)] = []
         if let rollout = Self.newestCodexRollout(in: codexHome),
            let modified = (try? rollout.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
-            candidates.append(("codex-\(rollout.lastPathComponent)", "Codex", modified))
+            candidates.append(("codex-\(rollout.lastPathComponent)", "Codex", modified, rollout))
         }
         if let thread = Self.newestCodexDesktopThread(in: codexHome.appendingPathComponent("sqlite/codex-dev.db")) {
-            candidates.append(("codex-desktop", thread.title, thread.updatedAt))
+            candidates.append(("codex-desktop", thread.title, thread.updatedAt, nil))
         }
-        guard let newest = candidates.max(by: { $0.at < $1.at }),
-              now.timeIntervalSince(newest.at) <= (includeIdle ? 900 : Self.codexStaleAfter) else { return [] }
-        return [ActivitySession(id: "\(provider.rawValue)-\(newest.id)", provider: provider, name: String(newest.name.prefix(100)), project: provider.displayName,
-                                state: now.timeIntervalSince(newest.at) <= Self.codexStaleAfter ? .working : .idle, waitingReason: nil, since: newest.at, isInferred: true)]
+        guard let newest = candidates.max(by: { $0.at < $1.at }) else { return [] }
+        let age = now.timeIntervalSince(newest.at)
+        let id = "\(provider.rawValue)-\(newest.id)"
+        let name = String(newest.name.prefix(100))
+
+        // Only a rollout fresh enough to matter is parsed: the parse is the expensive part.
+        if let rollout = newest.rollout, age <= Self.codexFinishedFor, let turn = codexTurn(in: rollout, modified: newest.at) {
+            let state: ActivitySession.State
+            switch turn {
+            case .started where age <= Self.codexTurnQuietLimit: state = .working
+            case .completed: state = .idle
+            // An abandoned or aborted turn just leaves; vanishing announces nothing.
+            case .started, .aborted: return []
+            }
+            return [ActivitySession(id: id, provider: provider, name: name, project: provider.displayName,
+                                    state: state, waitingReason: nil, since: newest.at)]
+        }
+
+        guard age <= (includeIdle ? 900 : Self.codexStaleAfter) else { return [] }
+        return [ActivitySession(id: id, provider: provider, name: name, project: provider.displayName,
+                                state: age <= Self.codexStaleAfter ? .working : .idle, waitingReason: nil, since: newest.at, isInferred: true)]
+    }
+
+    /// One parse per write: a rollout that has not changed still says what it said.
+    private var codexTurns: [URL: (modified: Date, turn: CodexRollout.Turn?)] = [:]
+
+    private func codexTurn(in rollout: URL, modified: Date) -> CodexRollout.Turn? {
+        if let cached = codexTurns[rollout], cached.modified == modified { return cached.turn }
+        let turn = CodexRollout.latestTurn(in: rollout)
+        if codexTurns.count > 16 { codexTurns.removeAll() }
+        codexTurns[rollout] = (modified, turn)
+        return turn
     }
 
     static func codexHome(home: URL = FileManager.default.homeDirectoryForCurrentUser,

@@ -24,6 +24,24 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.14",
+            headline: "Know if you're burning too fast.",
+            changes: [
+                .init("Over pace, or under it",
+                      "Every window now says whether you're spending faster than time is passing. Claude can lead with a daily budget: a seventh of the week, per day."),
+                .init("Seven more rings",
+                      "Kimi, Command Code, Devin, Kiro, Ollama, MiniMax, and the Gemini API. Switch them on in Settings → Providers."),
+                .init("Alerts at your levels",
+                      "Pick the warning and critical points yourself in Settings → Notifications."),
+                .init("Codex knows when it's done",
+                      "Finished turns chime and peek like Claude's. The card adds Spark and code-review limits and a 30-day chart."),
+                .init("A rail that gets out of the way",
+                      "It hides over full-screen apps, and you can drag it to any edge."),
+                .init("Small things",
+                      "Ghostty tab focus, usage right in the menu bar menu, your own alert sounds, and a peek that lasts as long as you like.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.13",
             headline: "Limits tell you when they bite, and when they let go.",
             changes: [

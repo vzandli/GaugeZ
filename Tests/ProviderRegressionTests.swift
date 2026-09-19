@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Security
 import SQLite3
@@ -52,7 +53,791 @@ struct ProviderRegressionTests {
         try await codexNetworking(root: root, defaults: defaults)
         try await networking(root: root, defaults: defaults)
         try await grokNetworking(root: root, defaults: defaults)
+        try paceAndThresholds()
+        try await codexTurnsAndExtras(root)
+        try kimiParsing(root)
+        try await kimiNetworking(root: root, defaults: defaults)
+        try commandCodeParsing(root)
+        try await commandCodeNetworking(root: root, defaults: defaults)
+        try ollamaParsing()
+        try await ollamaNetworking(defaults: defaults)
+        try devinParsing(root)
+        try await devinNetworking(root: root, defaults: defaults)
+        try await kiro(root, defaults)
+        try minimaxParsing()
+        try await minimaxNetworking(root: root, defaults: defaults)
+        try await gemini(root)
         print("Passed \(checks) provider regression checks.")
+    }
+
+    // MARK: - Pace, thresholds, Codex turns and extras
+
+    static func paceAndThresholds() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let halfway = UsageWindow(id: "w", label: "Weekly limit", usedPercent: 60, resetsAt: now.addingTimeInterval(3.5 * 86_400), durationMinutes: 10_080)
+        try expect(halfway.pace(now: now)?.percentagePoints == 10 && halfway.pace(now: now)?.isOver == true, "60% used halfway through is 10 points over pace")
+        let slow = UsageWindow(id: "w", label: "Weekly limit", usedPercent: 20, resetsAt: now.addingTimeInterval(3.5 * 86_400), durationMinutes: 10_080)
+        try expect(slow.pace(now: now)?.percentagePoints == -30, "20% used halfway through is 30 points under pace")
+        let skewed = UsageWindow(id: "w", label: "5-hour limit", usedPercent: 5, resetsAt: now.addingTimeInterval(6 * 3600), durationMinutes: 300)
+        try expect(skewed.pace(now: now)?.percentagePoints == 5, "A reset beyond one cycle counts as a window that just opened")
+        for window in [UsageWindow(id: "w", label: "x", usedPercent: 5, resetsAt: nil, durationMinutes: 300),
+                       UsageWindow(id: "w", label: "x", usedPercent: 5, resetsAt: now.addingTimeInterval(60), durationMinutes: nil),
+                       UsageWindow(id: "w", label: "x", usedPercent: 5, resetsAt: now.addingTimeInterval(-60), durationMinutes: 300)] {
+            try expect(window.pace(now: now) == nil, "No pace without a length and a future reset")
+        }
+
+        // Day 3 of 7 allows three sevenths of the week: 30% of the week used is 70% of that share.
+        let weekly = UsageWindow(id: "seven_day", label: "Weekly limit", usedPercent: 30, resetsAt: now.addingTimeInterval(4.5 * 86_400), durationMinutes: 10_080)
+        let daily = DailyPace.window(weekly: weekly, now: now)
+        try expect(daily.map { abs($0.usedPercent - 70) < 0.0001 } == true && daily?.durationMinutes == nil, "Daily pace meters the cumulative daily share")
+        try expect(daily?.resetsAt == now.addingTimeInterval(0.5 * 86_400), "The next share arrives when the day counted from the weekly reset ends")
+        let claude = UsageSnapshot(provider: .claude, accountID: nil, planName: nil, windows: [weekly], observedAt: now, source: "fixture", health: .live)
+        let paced = DailyPace.apply(to: claude, now: now)
+        try expect(paced.windows.map(\.id) == [DailyPace.windowID, "seven_day"] && paced.headlineWindow?.id == DailyPace.windowID, "Daily pace leads Claude and is the headline")
+        try expect(DailyPace.apply(to: paced, now: now).windows.count == 2, "Applying twice adds one window")
+        let codex = UsageSnapshot(provider: .codex, accountID: nil, planName: nil, windows: [weekly], observedAt: now, source: "fixture", health: .live)
+        try expect(DailyPace.apply(to: codex, now: now) == codex, "Only Claude is paced")
+
+        func snapshot(_ used: Double) -> UsageSnapshot {
+            UsageSnapshot(provider: .cursor, accountID: nil, planName: nil,
+                          windows: [UsageWindow(id: "w", label: "Plan", usedPercent: used, resetsAt: nil, durationMinutes: nil)],
+                          observedAt: now, source: "fixture", health: .live)
+        }
+        var notifier = ThresholdNotifier()
+        notifier.warnRemaining = 40
+        notifier.criticalRemaining = 10
+        try expect(notifier.observe(snapshot(50)).isEmpty, "Above the warning level is quiet")
+        try expect(notifier.observe(snapshot(65)).map(\.threshold) == [80], "A custom warning level fires at 40% left")
+        try expect(notifier.observe(snapshot(70)).isEmpty, "A crossing alerts once")
+        try expect(notifier.observe(snapshot(92)).map(\.threshold) == [100], "A custom critical level fires at 10% left")
+        try expect(notifier.observe(snapshot(10)).isEmpty && notifier.observe(snapshot(95)).map(\.threshold) == [80, 100], "Recovery re-arms both levels")
+        notifier.criticalRemaining = 60
+        try expect(notifier.observe(snapshot(10)).isEmpty && notifier.observe(snapshot(65)).map(\.threshold) == [80, 100], "The critical level never sits above the warning")
+    }
+
+    static func codexTurnsAndExtras(_ root: URL) async throws {
+        func event(_ type: String) -> String { #"{"type":"event_msg","payload":{"type":"\#(type)"}}"# }
+        let filler = #"{"type":"response_item","payload":{"type":"message","text":"\#(String(repeating: "x", count: 900))"}}"#
+        let rollout = root.appendingPathComponent("rollout-turns.jsonl")
+        try Data(([event("task_started")] + Array(repeating: filler, count: 20)).joined(separator: "\n").utf8).write(to: rollout)
+        try expect(CodexRollout.latestTurn(in: rollout) == .started, "A started turn behind streamed output is found")
+        try Data(([event("task_started")] + Array(repeating: filler, count: 600) + [event("task_complete"), #"{"type":"event_msg","payload":{"type":"item_completed"}}"#]).joined(separator: "\n").utf8).write(to: rollout)
+        try expect(CodexRollout.latestTurn(in: rollout) == .completed, "The newest lifecycle event wins, across read windows, and item_completed is not one")
+        try Data(([event("task_complete"), event("task_started"), event("turn_aborted")]).joined(separator: "\n").utf8).write(to: rollout)
+        try expect(CodexRollout.latestTurn(in: rollout) == .aborted, "An aborted turn is not a completion")
+        try Data(Array(repeating: filler, count: 5).joined(separator: "\n").utf8).write(to: rollout)
+        try expect(CodexRollout.latestTurn(in: rollout) == nil && CodexRollout.latestTurn(in: root.appendingPathComponent("absent.jsonl")) == nil, "No lifecycle event is no answer")
+
+        let usage = Data(#"""
+        {"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000,"reset_after_seconds":60},
+                       "secondary_window":{"used_percent":40,"limit_window_seconds":604800,"reset_after_seconds":600}},
+         "additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":100,"limit_window_seconds":18000}}},
+                                   {"limit_name":"Spark","rate_limit":{"primary_window":{"used_percent":3,"limit_window_seconds":18000}}},
+                                   {"limit_name":"Other","rate_limit":{"primary_window":{"used_percent":99}}}],
+         "code_review_rate_limit":{"primary_window":{"used_percent":"bad"},"secondary_window":{"used_percent":7,"limit_window_seconds":604800}}}
+        """#.utf8)
+        let windows = try CodexWebUsage.windows(from: usage)
+        try expect(windows.map(\.id) == ["primary", "secondary", "spark", "code-review-secondary"], "Spark once, code review's good window kept, unknown extras dropped")
+        try expect(windows.map(\.isExtra) == [false, false, true, true] && windows[2].label.hasPrefix("Spark"), "Extras are marked and named by group")
+        try expect(UsageSnapshot.automaticHeadline(in: windows)?.id == "secondary", "An exhausted extra never becomes the headline")
+        var watcher = UsageEventWatcher()
+        func codex(_ sparkUsed: Double) -> UsageSnapshot {
+            UsageSnapshot(provider: .codex, accountID: nil, planName: nil, windows: [
+                UsageWindow(id: "primary", label: "5-hour limit", usedPercent: 10, resetsAt: nil, durationMinutes: 300),
+                UsageWindow(id: "spark", label: "Spark", usedPercent: sparkUsed, resetsAt: nil, durationMinutes: 300, isExtra: true)
+            ], observedAt: .now, source: "fixture", health: .live)
+        }
+        _ = watcher.observe(codex(50))
+        try expect(watcher.observe(codex(100)).isEmpty, "An extra window reaching zero is not a limit event")
+        let legacy = try JSONDecoder().decode(UsageWindow.self, from: Data(#"{"id":"w","label":"x","usedPercent":5}"#.utf8))
+        try expect(!legacy.isExtra && legacy.resetsAt == nil, "Caches written before extras existed still load")
+
+        let profile = Data(#"{"stats":{"daily_usage_buckets":[{"start_date":"2026-09-18","tokens":1200},{"start_date":"2026-09-19T00:00:00Z","tokens":2500000},{"start_date":"bad","tokens":-1}]}}"#.utf8)
+        let buckets = CodexWebUsage.dailyTokens(from: profile) ?? []
+        try expect(buckets.map(\.tokens) == [1200, 2_500_000] && CodexWebUsage.dailyTokens(from: Data("{}".utf8)) == nil, "Daily buckets parse; a body without them draws no chart")
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let recent = DailyTokenBucket.recent(buckets, days: 3, now: Date(timeIntervalSince1970: 1_789_819_200), calendar: utc)
+        try expect(recent.map(\.day) == ["2026-09-17", "2026-09-18", "2026-09-19"] && recent.map(\.tokens) == [0, 1200, 2_500_000], "Quiet days are filled in and today is last")
+        try expect(DailyTokenBucket.compact(2_500_000) == "2.5M" && DailyTokenBucket.compact(1200) == "1k" && DailyTokenBucket.compact(12) == "12", "Compact token counts")
+
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        try expect(FullScreenDetector.isFullScreen(screenBounds: screen, frontmostPID: 7, windows: [(7, 0, screen)]), "A window spanning the display is full screen")
+        try expect(FullScreenDetector.isFullScreen(screenBounds: screen, frontmostPID: 7, windows: [(7, 0, CGRect(x: 0, y: 38, width: 1512, height: 944))], safeAreaTopInset: 38), "Below the camera housing still counts")
+        try expect(!FullScreenDetector.isFullScreen(screenBounds: screen, frontmostPID: 7, windows: [(7, 0, CGRect(x: 0, y: 38, width: 1512, height: 860)), (8, 0, screen), (7, 25, screen)]), "A maximized window, another app, or an overlay layer does not")
+
+        let frame = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        try expect(EdgeDropZone.target(pointer: CGPoint(x: 500, y: 790), in: frame, current: .right) == .top, "Carrying the rail to the top edge offers the top")
+        try expect(EdgeDropZone.target(pointer: CGPoint(x: 990, y: 400), in: frame, current: .right) == nil && EdgeDropZone.target(pointer: CGPoint(x: 500, y: 400), in: frame, current: .right) == nil, "The current edge and the middle of the screen offer nothing")
+        try expect(EdgeDropZone.target(pointer: CGPoint(x: 5, y: 30), in: frame, current: .right) == .left, "A corner goes to the nearer edge")
+    }
+
+    // MARK: - Kimi
+
+    static func kimiParsing(_ root: URL) throws {
+        let live = Data(#"""
+        {"user":{"userId":"fixture-user","membership":{"level":"LEVEL_ADVANCED"}},
+         "usage":{"limit":"100","used":"2","remaining":"98","resetTime":"2026-09-15T19:39:34.389610Z"},
+         "limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+                    "detail":{"limit":"100","used":"8","remaining":"92","resetTime":"2026-09-11T16:39:34.389610Z"}}]}
+        """#.utf8)
+        let read = try KimiUsageParser.read(from: live)
+        try expect(read.windows.map(\.id) == ["weekly", "rolling"], "Kimi summary is the weekly window, limits[] names its own")
+        try expect(read.windows[0].usedPercent == 2 && read.windows[0].durationMinutes == 10_080, "Weekly counts become a percent used")
+        try expect(read.windows[1].usedPercent == 8 && read.windows[1].durationMinutes == 300, "A 300-minute window is the 5-hour one")
+        try expect(read.windows[1].resetsAt == KimiUsageParser.date(from: "2026-09-11T16:39:34.389610Z"), "Fractional resets parse")
+        try expect(read.plan == "Advanced", "LEVEL_ADVANCED names the tier")
+
+        let hourly = Data(#"{"limits":[{"window":{"duration":5,"timeUnit":"TIME_UNIT_HOUR"},"detail":{"limit":"50","used":"50"}},{"window":{"duration":1,"timeUnit":"TIME_UNIT_WEEK"},"detail":{"limit":"200","used":"20"}}]}"#.utf8)
+        let both = try KimiUsageParser.read(from: hourly)
+        try expect(both.windows.map(\.id) == ["rolling", "weekly"], "Hour and week units are recognized")
+        try expect(both.windows[0].isExhausted && both.windows[1].usedPercent == 10, "Used over limit is the percent used")
+        try expect(both.plan == nil, "No membership means no plan name")
+
+        let duplicated = Data(#"{"usage":{"limit":"100","used":"5"},"limits":[{"window":{"duration":1,"timeUnit":"TIME_UNIT_WEEK"},"detail":{"limit":"100","used":"90"}}]}"#.utf8)
+        try expect(try KimiUsageParser.read(from: duplicated).windows.map(\.id) == ["weekly"], "The weekly window is not listed twice")
+
+        let unknown = Data(#"{"usage":{"limit":"100","used":"1"},"limits":[{"window":{"duration":17,"timeUnit":"TIME_UNIT_DAY"},"detail":{"limit":"9","used":"1"}}]}"#.utf8)
+        try expect(try KimiUsageParser.read(from: unknown).windows.map(\.id) == ["weekly"], "An unnamed window is dropped, not mislabelled")
+
+        for json in ["{}", "[]", #"{"usage":{}}"#, #"{"usage":{"used":"2"}}"#, #"{"usage":{"limit":"100"}}"#,
+                     #"{"usage":{"limit":"100","used":"none"}}"#, #"{"limits":[]}"#] {
+            try rejects({ _ = try KimiUsageParser.read(from: Data(json.utf8)) }, "Missing or invalid Kimi data is not free quota: \(json)")
+        }
+
+        // Credentials
+        let home = root.appendingPathComponent("kimi-home")
+        let credentials = home.appendingPathComponent("credentials")
+        try FileManager.default.createDirectory(at: credentials, withIntermediateDirectories: true)
+        let file = credentials.appendingPathComponent("kimi-code.json")
+        try expect(KimiCredentialReader.authURL(home: home, environment: [:]).path == home.appendingPathComponent(".kimi-code/credentials/kimi-code.json").path, "Default path is ~/.kimi-code")
+        try expect(KimiCredentialReader.authURL(home: home, environment: ["KIMI_CODE_HOME": home.path]) == file, "KIMI_CODE_HOME moves the data root")
+        try expect(KimiCredentialReader.authURL(home: home, environment: ["KIMI_CODE_HOME": ""]).path.hasSuffix(".kimi-code/credentials/kimi-code.json"), "An empty override is ignored")
+
+        try Data(#"{"access_token":"kimi-fixture","expires_at":4102444800}"#.utf8).write(to: file)
+        let loaded = try KimiCredentialReader.load(from: file)
+        try expect(loaded.accessToken == "kimi-fixture" && loaded.expiresAt > .now, "Read the token and its expiry")
+        try Data(#"{"access_token":"kimi-fixture"}"#.utf8).write(to: file)
+        try rejects({ _ = try KimiCredentialReader.load(from: file) }, "A session with no expiry is not trusted")
+        try Data(#"{"access_token":"bad\r\nheader","expires_at":4102444800}"#.utf8).write(to: file)
+        try rejects({ _ = try KimiCredentialReader.load(from: file) }, "Reject Kimi credential header injection")
+        try Data(#"{"access_token":"","expires_at":4102444800}"#.utf8).write(to: file)
+        try rejects({ _ = try KimiCredentialReader.load(from: file) }, "An empty Kimi token is not a sign-in")
+        try rejects({ _ = try KimiCredentialReader.load(from: root.appendingPathComponent("no-kimi.json")) }, "No Kimi auth file means not signed in")
+    }
+
+    static func kimiNetworking(root: URL, defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .kimi, defaults: defaults)
+        policy.reset()
+        let valid = KimiCredential(accessToken: "kimi-fixture", expiresAt: .distantFuture)
+        let provider = KimiUsageProvider(session: session, retryPolicy: policy, loadCredential: { valid })
+
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, #"{"user":{"membership":{"level":"LEVEL_ADVANCED"}},"usage":{"limit":"100","used":"25"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"60"}}]}"#)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .kimi && snapshot.planName == "Kimi Code Advanced", "Kimi snapshot names the tier")
+        try expect(snapshot.headlineWindow?.id == "rolling" && snapshot.remainingPercent == 40, "The 5-hour window leads")
+        try expect(snapshot.accountID == nil, "The Kimi token carries no address")
+        let request = FixtureProtocol.requests.last!
+        try expect(request.url == KimiUsageParser.endpoint && request.httpMethod == "GET"
+                   && request.value(forHTTPHeaderField: "Authorization") == "Bearer kimi-fixture", "Official usages route with bearer token")
+
+        FixtureProtocol.responses = [(404, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Kimi 404") }
+        catch KimiProviderError.noPlan { checks += 1 }
+        try expect(KimiProviderError.noPlan.providerHealth == .unavailable(KimiProviderError.noPlan.errorDescription!), "No Kimi Code plan is unavailable, not signed out")
+
+        FixtureProtocol.responses = [(401, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Kimi 401") }
+        catch KimiProviderError.unauthorized { checks += 1 }
+
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Kimi throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "Kimi persists server backoff")
+        let count = FixtureProtocol.requests.count
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected local backoff") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Kimi request during backoff")
+        policy.reset()
+
+        let stale = KimiUsageProvider(session: session, retryPolicy: policy,
+                                      loadCredential: { KimiCredential(accessToken: "kimi-fixture", expiresAt: .distantPast) })
+        do { _ = try await stale.fetchSnapshot(); throw Failure(description: "Expected expired Kimi session") }
+        catch KimiProviderError.expired { checks += 1 }
+        let expiredHealth = KimiProviderError.expired.providerHealth
+        try expect(expiredHealth == .signedOut(KimiProviderError.expired.errorDescription!), "An expired Kimi token reads as signed out")
+        try expect(KimiProviderError.expired.errorDescription?.contains("kimi") == true, "The expired message names the CLI to run")
+
+        let missing = KimiUsageProvider(session: session, retryPolicy: policy, loadCredential: { throw KimiProviderError.notSignedIn })
+        do { _ = try await missing.fetchSnapshot(); throw Failure(description: "Expected no Kimi sign-in") }
+        catch KimiProviderError.notSignedIn { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Kimi request without a usable token")
+        _ = root
+    }
+
+    // MARK: - Command Code
+
+    static func commandCodeParsing(_ root: URL) throws {
+        let summary = Data(#"{"totalCost":3.5,"totalCount":42}"#.utf8)
+        let credits = Data(#"{"credits":{"monthlyCredits":16.5},"windowLimits":{"fiveHour":{"used":2,"cap":8,"resetAt":1789000000},"weekly":{"used":0,"cap":40,"resetAt":0}}}"#.utf8)
+        let subscription = Data(#"{"data":{"planId":"goat_monthly","currentPeriodStart":"2026-09-01T00:00:00Z","currentPeriodEnd":"2026-10-01T00:00:00Z"}}"#.utf8)
+        let read = try CommandCodeUsageParser.read(summary: summary, credits: credits, subscription: subscription)
+        try expect(read.windows.map(\.id) == ["monthly", "fiveHour", "weekly"], "Command Code windows in headline order")
+        try expect(read.windows[0].usedPercent == 17.5, "Monthly is spend over spend plus remaining credits")
+        try expect(read.windows[0].durationMinutes == 43_200 && read.windows[0].resetsAt == CommandCodeUsageParser.date("2026-10-01T00:00:00Z"), "Monthly resets at the period end")
+        try expect(read.windows[1].usedPercent == 25 && read.windows[1].durationMinutes == 300, "Capped five-hour window becomes a percent")
+        try expect(read.windows[2].usedPercent == 0 && read.windows[2].resetsAt == nil, "A resetAt of 0 is absence, not 1970")
+        try expect(read.plan == "GOAT" && read.balance == 16.5, "Plan id and remaining money are read")
+
+        let bare = Data(#"{"planId":"team-goat-annual","currentPeriodEnd":1789000000000}"#.utf8)
+        let unwrapped = try CommandCodeUsageParser.read(summary: summary, credits: credits, subscription: bare)
+        try expect(unwrapped.plan == "GOAT" && unwrapped.windows[0].resetsAt == Date(timeIntervalSince1970: 1_789_000_000), "Unwrapped subscription and millisecond resets both parse")
+        try expect(CommandCodeUsageParser.planName("starter") == "starter" && CommandCodeUsageParser.planName("") == nil, "An unknown plan keeps its own name")
+
+        // Money with no allowance behind it is a balance, not a ring; windows decide the error.
+        let uncapped = Data(#"{"credits":{"monthlyCredits":0},"windowLimits":{"fiveHour":{"used":1,"cap":4}}}"#.utf8)
+        let windowsOnly = try CommandCodeUsageParser.read(summary: Data(#"{"totalCost":0}"#.utf8), credits: uncapped, subscription: Data("{}".utf8))
+        try expect(windowsOnly.windows.map(\.id) == ["fiveHour"], "No monthly pot still leaves the metered windows")
+        try rejects({ _ = try CommandCodeUsageParser.read(summary: Data(#"{"totalCost":0}"#.utf8), credits: Data(#"{"credits":{}}"#.utf8), subscription: Data("{}".utf8)) },
+                    "Nothing metered at all is not zero usage")
+        try rejects({ _ = try CommandCodeUsageParser.read(summary: Data("[]".utf8), credits: credits, subscription: Data("{}".utf8)) }, "A non-object summary is malformed")
+        try rejects({ _ = try CommandCodeUsageParser.read(summary: summary, credits: Data("nope".utf8), subscription: Data("{}".utf8)) }, "Unreadable credits are malformed")
+        let noUsed = Data(#"{"credits":{},"windowLimits":{"weekly":{"cap":40}}}"#.utf8)
+        try rejects({ _ = try CommandCodeUsageParser.read(summary: Data(#"{"totalCost":0}"#.utf8), credits: noUsed, subscription: Data("{}".utf8)) },
+                    "A capped window with no used figure is dropped, never zero")
+
+        try expect(CommandCodeUsageParser.orgID(whoami: Data(#"{"org":{"id":"org-fixture"}}"#.utf8)) == "org-fixture", "whoami names the org")
+        try expect(CommandCodeUsageParser.orgID(whoami: Data(#"{"org":{"id":" "}}"#.utf8)) == nil, "A blank org id is absent")
+
+        let file = root.appendingPathComponent("commandcode-auth.json")
+        try Data(#"{"apiKey":"cc-fixture","userName":"Fixture User"}"#.utf8).write(to: file)
+        let credential = try CommandCodeCredentialReader.load(from: file, environment: [:])
+        try expect(credential.apiKey == "cc-fixture" && credential.userName == "Fixture User", "Read the Command Code key and user")
+        try expect(try CommandCodeCredentialReader.load(from: file, environment: ["COMMAND_CODE_API_KEY": "env-key"]).apiKey == "env-key", "The environment key wins")
+        try Data(#"{"apiKey":"bad\nheader"}"#.utf8).write(to: file)
+        try rejects({ _ = try CommandCodeCredentialReader.load(from: file, environment: [:]) }, "Reject Command Code header injection")
+        try rejects({ _ = try CommandCodeCredentialReader.load(from: root.appendingPathComponent("no-cc.json"), environment: [:]) }, "No Command Code auth file means not signed in")
+    }
+
+    static func commandCodeNetworking(root: URL, defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .commandcode, defaults: defaults)
+        policy.reset()
+        let provider = CommandCodeUsageProvider(session: session, retryPolicy: policy,
+                                                loadCredentials: { CommandCodeCredential(apiKey: "cc-fixture", userName: "Fixture User") })
+        // Credits and subscriptions are fetched concurrently, so one body answers both: each
+        // parser reads only its own keys.
+        let billing = #"{"credits":{"monthlyCredits":30},"windowLimits":{"weekly":{"used":5,"cap":50}},"data":{"planId":"goat_monthly","currentPeriodStart":"2026-09-01T00:00:00Z","currentPeriodEnd":"2026-10-01T00:00:00Z"}}"#
+
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, #"{"org":{"id":"org-fixture"}}"#), (200, billing), (200, billing), (200, #"{"totalCost":10}"#)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .commandcode && snapshot.planName == "Command Code GOAT" && snapshot.accountID == "Fixture User", "Command Code snapshot")
+        try expect(snapshot.headlineWindow?.id == "monthly" && snapshot.remainingPercent == 75, "Monthly leads: 10 spent of a 40 pot")
+        try expect(snapshot.costInfo?.prepaidBalance == 30, "Remaining credits ride along as money")
+        try expect(FixtureProtocol.requests.count == 4, "whoami, credits, subscriptions, summary")
+        try expect(FixtureProtocol.requests[0].url == CommandCodeUsageParser.whoami, "whoami is asked first")
+        try expect(FixtureProtocol.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer cc-fixture" }, "Every call carries the borrowed key")
+        let summaryURL = FixtureProtocol.requests[3].url?.absoluteString ?? ""
+        try expect(summaryURL.hasPrefix(CommandCodeUsageParser.summary.absoluteString) && summaryURL.contains("orgId=org-fixture") && summaryURL.contains("since=2026-09-01"),
+                   "Spend is counted from the period start, scoped to the org")
+
+        FixtureProtocol.responses = [(403, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Command Code 403") }
+        catch CommandCodeProviderError.unauthorized { checks += 1 }
+
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Command Code throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "Command Code persists server backoff")
+        let count = FixtureProtocol.requests.count
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected local backoff") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Command Code request during backoff")
+        policy.reset()
+
+        let signedOut = CommandCodeUsageProvider(session: session, retryPolicy: policy, loadCredentials: { throw CommandCodeProviderError.notSignedIn })
+        do { _ = try await signedOut.fetchSnapshot(); throw Failure(description: "Expected no Command Code sign-in") }
+        catch CommandCodeProviderError.notSignedIn { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Command Code request without a key")
+        _ = root
+    }
+
+    // MARK: - Ollama
+
+    static func ollamaParsing() throws {
+        let modern = Data(#"{"activity":{"cost":"0.00000","period":{"type":"last_4_weeks"}},"limits":{"monthly":{"usage":0.152,"models":[{"name":"glm-5.3","request_count":468}]}}}"#.utf8)
+        let windows = try OllamaUsageParser.windows(from: modern)
+        try expect(windows.map(\.id) == ["monthly"], "Per-model request counts are not windows")
+        try expect(abs(windows[0].usedPercent - 15.2) < 0.0001 && windows[0].durationMinutes == 43_200, "usage is a fraction of the monthly allowance")
+        try expect(windows[0].resetsAt == nil, "Ollama exposes no billing reset, so none is shown")
+
+        let legacy = Data(#"{"limits":{"session":{"usage":0,"models":[]},"weekly":{"usage":0.41}}}"#.utf8)
+        let legacyWindows = try OllamaUsageParser.windows(from: legacy)
+        try expect(legacyWindows.map(\.id) == ["session", "weekly"], "Legacy plans report session and weekly windows")
+        try expect(legacyWindows[0].usedPercent == 0 && legacyWindows[0].remainingPercent == 100, "0% used is a reading, not a missing window")
+        try expect(legacyWindows[0].durationMinutes == nil, "A session has no stated length")
+        try expect(abs(legacyWindows[1].usedPercent - 41) < 0.0001, "Weekly fraction becomes a percent")
+
+        let overflow = Data(#"{"limits":{"monthly":{"usage":1.4}}}"#.utf8)
+        try expect(try OllamaUsageParser.windows(from: overflow)[0].usedPercent == 100, "Usage past the allowance clamps to full")
+
+        for json in ["{}", "[]", #"{"limits":{}}"#, #"{"limits":{"monthly":{}}}"#, #"{"limits":{"monthly":{"usage":"0.5"}}}"#,
+                     #"{"limits":{"monthly":{"usage":-1}}}"#] {
+            try rejects({ _ = try OllamaUsageParser.windows(from: Data(json.utf8)) }, "Missing or invalid Ollama data is not free quota: \(json)")
+        }
+    }
+
+    static func ollamaNetworking(defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .ollama, defaults: defaults)
+        policy.reset()
+        let provider = OllamaUsageProvider(session: session, retryPolicy: policy, loadKey: { "ollama-fixture" })
+
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, #"{"limits":{"monthly":{"usage":0.25}}}"#)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .ollama && snapshot.planName == "Ollama Cloud" && snapshot.remainingPercent == 75, "Ollama snapshot")
+        let request = FixtureProtocol.requests.last!
+        try expect(request.url == OllamaUsageParser.endpoint && request.httpMethod == "GET"
+                   && request.value(forHTTPHeaderField: "Authorization") == "Bearer ollama-fixture", "Official usage route with the owned key")
+
+        FixtureProtocol.responses = [(401, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Ollama 401") }
+        catch OllamaProviderError.unauthorized { checks += 1 }
+
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Ollama throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "Ollama persists server backoff")
+        policy.reset()
+
+        let count = FixtureProtocol.requests.count
+        let keyless = OllamaUsageProvider(session: session, retryPolicy: policy, loadKey: { nil })
+        do { _ = try await keyless.fetchSnapshot(); throw Failure(description: "Expected missing Ollama key") }
+        catch OllamaProviderError.noKey { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Ollama request without a key")
+        try expect(OllamaProviderError.noKey.providerHealth == .signedOut(OllamaProviderError.noKey.errorDescription!), "A missing key reads as signed out")
+    }
+
+// Splice into Tests/ProviderRegressionTests.swift (inside the struct), and add to main():
+//     try devinParsing(root)
+//     try await devinNetworking(root: root, defaults: defaults)
+//     try await kiro(root, defaults)
+
+    static func devinParsing(_ root: URL) throws {
+        // Protobuf JSON: 64-bit fields as strings, percentages are *remaining*.
+        let live = Data(#"{"userStatus":{"planStatus":{"dailyQuotaRemainingPercent":"62.5","dailyQuotaResetAtUnix":"1800000000","weeklyQuotaRemainingPercent":30,"weeklyQuotaResetAtUnix":1800500000,"overageBalanceMicros":"1500000"}}}"#.utf8)
+        let windows = try DevinUsageParser.windows(from: live)
+        try expect(windows.map(\.id) == ["daily", "weekly"], "Devin reports the daily and weekly quotas in that order")
+        try expect(windows[0].usedPercent == 37.5 && windows[0].durationMinutes == 1440, "Devin percentages are remaining allowance, not usage")
+        try expect(windows[0].resetsAt == Date(timeIntervalSince1970: 1_800_000_000), "String-encoded reset timestamps parse")
+        try expect(windows[1].usedPercent == 70 && windows[1].durationMinutes == 10080, "Numeric percentages parse too")
+        try expect(windows.count == 2, "An overage balance has no ceiling, so it is not a window")
+
+        // The service drops the percent at 0; the reset is what says the quota is still metered.
+        let exhausted = Data(#"{"userStatus":{"planStatus":{"dailyQuotaResetAtUnix":"1800000000"}}}"#.utf8)
+        try expect(try DevinUsageParser.windows(from: exhausted).map(\.usedPercent) == [100], "A missing percent beside a reset is fully used")
+        let hidden = Data(#"{"userStatus":{"planStatus":{"hideDailyQuota":true,"dailyQuotaRemainingPercent":50,"weeklyQuotaRemainingPercent":10}}}"#.utf8)
+        try expect(try DevinUsageParser.windows(from: hidden).map(\.id) == ["weekly"], "A hidden quota is not drawn")
+        let boolean = Data(#"{"userStatus":{"planStatus":{"dailyQuotaRemainingPercent":true,"dailyQuotaResetAtUnix":true}}}"#.utf8)
+        try rejects({ _ = try DevinUsageParser.windows(from: boolean) }, "A JSON true is not the number 1")
+        for json in ["{}", #"{"userStatus":{}}"#, #"{"userStatus":{"planStatus":{}}}"#,
+                     #"{"userStatus":{"planStatus":{"dailyQuotaRemainingPercent":-5}}}"#,
+                     #"{"userStatus":{"planStatus":{"weeklyQuotaRemainingPercent":140}}}"#] {
+            try rejects({ _ = try DevinUsageParser.windows(from: Data(json.utf8)) }, "Missing or impossible Devin data is not free quota")
+        }
+
+        // Credentials: Desktop store first, CLI file only when it has nothing to borrow.
+        let store = root.appendingPathComponent("devin-state.vscdb")
+        try makeItemTable(at: store, key: "windsurfAuthStatus",
+                          value: #"{"apiKey":"devin-fixture","email":"fixture@example.invalid"}"#)
+        let cli = root.appendingPathComponent("devin-credentials.toml")
+        try Data("windsurf_api_key = \"cli-fixture\"\n".utf8).write(to: cli)
+        let desktop = try DevinLocalSession.load(stateDatabase: store, cliCredentials: cli)
+        try expect(desktop.apiKey == "devin-fixture" && desktop.email == "fixture@example.invalid", "Devin Desktop's sign-in wins")
+        let missing = root.appendingPathComponent("devin-absent.vscdb")
+        let fallback = try DevinLocalSession.load(stateDatabase: missing, cliCredentials: cli)
+        try expect(fallback.apiKey == "cli-fixture" && fallback.email == nil, "The CLI file is the fallback")
+        try makeItemTable(at: store, key: "windsurfAuthStatus", value: #"{"apiKey":"bad\r\nheader"}"#)
+        try expect(DevinLocalSession.loadDesktop(from: store) == nil, "Reject credential header injection")
+        try makeItemTable(at: store, key: "windsurfAuthStatus", value: #"{"apiKey":""}"#)
+        try expect(DevinLocalSession.loadDesktop(from: store) == nil, "An empty key is not a sign-in")
+        try rejects({ _ = try DevinLocalSession.load(stateDatabase: missing, cliCredentials: root.appendingPathComponent("nope.toml")) },
+                    "No Devin source at all is not signed in")
+    }
+
+    /// A one-key `ItemTable`, the VS Code store shape Devin Desktop uses.
+    static func makeItemTable(at url: URL, key: String, value: String) throws {
+        try? FileManager.default.removeItem(at: url)
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else { throw Failure(description: "Could not create \(url.path)") }
+        defer { sqlite3_close(db) }
+        let escaped = value.replacingOccurrences(of: "'", with: "''")
+        let sql = "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value BLOB);"
+            + "DELETE FROM ItemTable;INSERT INTO ItemTable VALUES ('\(key)', '\(escaped)');"
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw Failure(description: "Could not seed \(url.path)") }
+    }
+
+    static func devinNetworking(root: URL, defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .devin, defaults: defaults)
+        let credential = DevinLocalSession(apiKey: "devin-fixture", email: "fixture@example.invalid", source: "fixture")
+        let provider = DevinUsageProvider(session: session, retryPolicy: policy, loadCredentials: { credential })
+
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, #"{"userStatus":{"planStatus":{"dailyQuotaRemainingPercent":80,"weeklyQuotaRemainingPercent":45}}}"#)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .devin && snapshot.accountID == "fixture@example.invalid", "Devin snapshot carries the borrowed account")
+        try expect(snapshot.windows.map(\.remainingPercent) == [80, 45], "Devin snapshot keeps both quotas")
+        let request = FixtureProtocol.requests.last!
+        try expect(request.url == DevinUsageParser.endpoint && request.httpMethod == "POST", "GetUserStatus over Connect")
+        try expect(request.value(forHTTPHeaderField: "Connect-Protocol-Version") == "1", "Connect handshake header is sent")
+        try expect(request.value(forHTTPHeaderField: "Authorization") == nil, "Devin carries its key in the body, never a header")
+
+        FixtureProtocol.responses = [(401, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Devin 401") }
+        catch DevinProviderError.unauthorized { checks += 1 }
+        FixtureProtocol.responses = [(403, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Devin 403") }
+        catch DevinProviderError.accessDenied { checks += 1 }
+        FixtureProtocol.responses = [(503, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Devin 503") }
+        catch DevinProviderError.server(503) { checks += 1 }
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected Devin throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "Devin persists server backoff")
+        let count = FixtureProtocol.requests.count
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected local backoff") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No Devin request during backoff")
+        policy.reset()
+
+        let signedOut = DevinUsageProvider(session: session, retryPolicy: policy,
+                                           loadCredentials: { throw DevinProviderError.notSignedIn })
+        do { _ = try await signedOut.fetchSnapshot(); throw Failure(description: "Expected Devin not signed in") }
+        catch DevinProviderError.notSignedIn { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No request without a borrowed key")
+        try expect(DevinProviderError.notSignedIn.providerHealth == .signedOut(DevinProviderError.notSignedIn.errorDescription!), "A missing Devin sign-in reads as signed out")
+    }
+
+    static func kiro(_ root: URL, _ defaults: UserDefaults) async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)  // 2027-01-15 UTC
+        let card = """
+        \u{1B}[1m╭────────────────────────────────────────────╮\u{1B}[0m
+        │ Estimated Usage | Plan: KIRO PRO | 3 usage breakdowns │
+        │ \u{1B}[32m████████████\u{1B}[0m 42% (210.0 of 500 covered in plan) │
+        │ Credits reset on 2027-02-01                │
+        ╰────────────────────────────────────────────╯
+        """
+        let reading = try KiroUsageParser.reading(from: card, now: now)
+        try expect(reading.credits.id == "credits" && reading.credits.usedPercent == 42, "The bar's percent is the credit reading")
+        try expect(reading.credits.durationMinutes == 43200, "Kiro credits are a monthly pool")
+        try expect(reading.plan == "Kiro Pro", "A shouted plan name is title-cased")
+        try expect(KiroUsageParser.stripANSI(card).contains("\u{1B}") == false, "ANSI escapes are stripped before parsing")
+
+        // No bar: the "(X of Y covered in plan)" pair is used of total, not remaining.
+        let pairOnly = "Estimated Usage | Plan: KIRO FREE\n(25 of 100 covered in plan)\nresets on 2/1\n"
+        let fromPair = try KiroUsageParser.reading(from: pairOnly, now: now)
+        try expect(fromPair.credits.usedPercent == 25 && fromPair.plan == "Kiro Free", "The credit pair is a fallback reading")
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.locale = Locale(identifier: "en_US_POSIX")
+        try expect(gregorian.component(.year, from: fromPair.credits.resetsAt!) == 2027
+                   && gregorian.component(.month, from: fromPair.credits.resetsAt!) == 2, "An MM/DD reset still ahead stays in this year")
+        let pastReset = try KiroUsageParser.reading(from: "\u{1B}[0m███ 10% resets on 1/2", now: now)
+        try expect(gregorian.component(.year, from: pastReset.credits.resetsAt ?? .distantPast) == 2028, "An MM/DD reset already past rolls into next year")
+
+        // Nothing metered is never a 0% ring.
+        try rejects({ _ = try KiroUsageParser.reading(from: "Estimated Usage | Plan: KIRO FREE\n") }, "A plan name with no meter is not 0% used")
+        try rejects({ _ = try KiroUsageParser.reading(from: "") }, "Empty CLI output is not a reading")
+        for text in ["You are not logged in. Run kiro-cli login.", "\u{1B}[31mOAuth error\u{1B}[0m: token expired",
+                     "login required", "failed to initialize auth portal"] {
+            try expect(KiroUsageParser.mentionsSignedOut(text), "kiro-cli says signed out in its own words: \(text)")
+            do { _ = try KiroUsageParser.reading(from: text); throw Failure(description: "Expected Kiro needsAuth") }
+            catch KiroProviderError.notSignedIn { checks += 1 }
+        }
+        try expect(KiroProviderError.notSignedIn.providerHealth == .signedOut(KiroProviderError.notSignedIn.errorDescription!),
+                   "An expired kiro-cli session reads as signed out, not as a failure to repair")
+
+        // Whichever stream carries the card wins; older CLIs use stdout, newer ones stderr.
+        try expect(KiroCLI.usageText(stdout: "", stderr: "Estimated Usage | 5%")?.contains("Estimated") == true, "The card is read from stderr when stdout is empty")
+        try expect(KiroCLI.usageText(stdout: "Estimated Usage | 5%", stderr: "warning") == "Estimated Usage | 5%", "The stream with the card heading wins")
+        try expect(KiroCLI.usageText(stdout: "  \n", stderr: "") == nil, "Silence is not output")
+        try expect(KiroCLI.locateBinary(environment: ["HOME": "/nonexistent-kiro-home"]) == nil, "kiro-cli absent means absent, not signed out")
+
+        // The subprocess path, against stand-in scripts: the real CLI needs a login and a network.
+        // `read` proves stdin is /dev/null — inheriting a terminal is how this poll would hang.
+        let answering = try makeScript(root.appendingPathComponent("kiro-ok"), body: """
+        read ignored
+        echo "Estimated Usage | Plan: KIRO PRO" 1>&2
+        echo "███ 7% (35 of 500 covered in plan)" 1>&2
+        """)
+        let text = try KiroCLI.run(binary: answering, timeout: 10)
+        try expect(try KiroUsageParser.reading(from: text).credits.usedPercent == 7, "The card is read back off a CLI that answers on stderr, with stdin closed")
+
+        let refusing = try makeScript(root.appendingPathComponent("kiro-out"), body: """
+        echo "You are not logged in. Run kiro-cli login." 1>&2
+        exit 1
+        """)
+        do { _ = try KiroCLI.run(binary: refusing, timeout: 10); throw Failure(description: "Expected Kiro needsAuth from exit") }
+        catch KiroProviderError.notSignedIn { checks += 1 }
+
+        let wedged = try makeScript(root.appendingPathComponent("kiro-hang"), body: "sleep 60")
+        let started = Date()
+        do { _ = try KiroCLI.run(binary: wedged, timeout: 1); throw Failure(description: "Expected kiro-cli timeout") }
+        catch KiroProviderError.timedOut { checks += 1 }
+        try expect(Date().timeIntervalSince(started) < 10, "A wedged CLI is killed, not waited on")
+        do { _ = try KiroCLI.run(binary: root.appendingPathComponent("nonexistent-kiro-cli")); throw Failure(description: "Expected launch failure") }
+        catch KiroProviderError.notInstalled { checks += 1 }
+
+        // The provider itself, with the CLI injected so no binary is ever spawned for it.
+        let policy = ProviderRetryPolicy(provider: .kiro, defaults: defaults)
+        let provider = KiroUsageProvider(retryPolicy: policy, readUsage: { card })
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .kiro && snapshot.planName == "Kiro Pro" && snapshot.remainingPercent == 58, "Kiro snapshot follows the CLI card")
+        try expect(snapshot.accountID == nil, "kiro-cli never names the account, so none is claimed")
+        let loggedOut = KiroUsageProvider(retryPolicy: policy, readUsage: { throw KiroProviderError.notSignedIn })
+        do { _ = try await loggedOut.fetchSnapshot(); throw Failure(description: "Expected Kiro signed out") }
+        catch KiroProviderError.notSignedIn { checks += 1 }
+    }
+
+    /// An executable stand-in for kiro-cli that ignores the arguments it is handed.
+    static func makeScript(_ url: URL, body: String) throws -> URL {
+        try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
+    }
+
+// Group C regression checks: MiniMax Coding Plan and the Gemini local token ledger.
+// Splice these static functions into Tests/ProviderRegressionTests.swift and add to main():
+//     try minimaxParsing()
+//     try await minimaxNetworking(root: root, defaults: defaults)
+//     try await gemini(root)
+
+    static func minimaxParsing() throws {
+        // Coding Plan: the counts are *remaining*, so used is total - remaining.
+        let counts = Data(#"""
+        {"base_resp":{"status_code":0},"current_subscribe_title":"Max","model_remains":[
+          {"model_name":"general","current_interval_total_count":1000,"current_interval_usage_count":250,
+           "start_time":1700000000000,"end_time":1700018000000,
+           "current_weekly_total_count":5000,"current_weekly_usage_count":4000}]}
+        """#.utf8)
+        let reading = try MiniMaxUsageParser.reading(from: counts, now: Date(timeIntervalSince1970: 1_700_000_100))
+        try expect(reading.plan == "Max", "MiniMax plan name comes from current_subscribe_title")
+        try expect(reading.windows.map(\.id) == ["session", "weekly"], "MiniMax windows in headline order")
+        try expect(reading.windows[0].usedPercent == 75 && reading.windows[1].usedPercent == 20, "Remaining counts become used percent")
+        try expect(reading.windows[0].durationMinutes == 300, "Interval duration comes from start_time/end_time")
+        try expect(reading.windows[0].resetsAt == Date(timeIntervalSince1970: 1_700_018_000), "A future end_time is the reset")
+        try expect(reading.windows[1].durationMinutes == 10_080, "Weekly falls back to a seven-day duration")
+
+        // Token Plan answers percentages instead, and remaining can exceed 100 under a boost.
+        let percents = Data(#"""
+        {"base_resp":{"status_code":0},"model_remains":[
+          {"model_name":"MiniMax-M2","current_interval_remaining_percent":60,"remains_time":900000,
+           "current_weekly_remaining_percent":130}]}
+        """#.utf8)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let plan = try MiniMaxUsageParser.reading(from: percents, now: now)
+        try expect(plan.windows[0].usedPercent == 40, "Remaining percent becomes used percent")
+        try expect(plan.windows[1].usedPercent == 0, "A boosted remaining over 100 never reads as negative use")
+        try expect(plan.windows[0].resetsAt == now.addingTimeInterval(900), "remains_time is milliseconds from now")
+
+        // A video schema row sitting first must not become the ring, and an unlimited weekly must.
+        let lanes = Data(#"""
+        {"model_remains":[
+          {"model_name":"video generation","current_interval_total_count":0,"current_interval_usage_count":0,
+           "current_interval_status":3,"current_interval_remaining_percent":100},
+          {"model_name":"general","current_interval_remaining_percent":10,
+           "current_weekly_status":3,"current_weekly_remaining_percent":100}]}
+        """#.utf8)
+        let mixed = try MiniMaxUsageParser.reading(from: lanes, now: now)
+        try expect(mixed.windows.count == 2 && mixed.windows[0].usedPercent == 90, "The text lane is the ring, not the video placeholder")
+        try expect(mixed.windows[1].usedPercent == 0 && mixed.windows[1].resetsAt == nil, "An unlimited weekly is empty and never resets")
+
+        // `data` wraps the payload on some hosts; inner keys win.
+        let wrapped = Data(#"{"base_resp":{"status_code":0},"data":{"combo_title":"Pro","model_remains":[{"current_interval_total_count":10,"current_interval_usage_count":2}]}}"#.utf8)
+        let inner = try MiniMaxUsageParser.reading(from: wrapped, now: now)
+        try expect(inner.plan == "Pro" && inner.windows[0].usedPercent == 80, "A data-wrapped payload reads the same")
+
+        for json in ["{}", #"{"model_remains":[]}"#, #"{"model_remains":[{"model_name":"general"}]}"#,
+                     #"{"base_resp":{"status_code":1004},"model_remains":[{"current_interval_total_count":10,"current_interval_usage_count":2}]}"#] {
+            try rejects({ _ = try MiniMaxUsageParser.reading(from: Data(json.utf8), now: now) }, "Missing or refused MiniMax data is not free quota")
+        }
+        do {
+            _ = try MiniMaxUsageParser.reading(from: Data(#"{"base_resp":{"status_code":401,"status_msg":"unauthorized"}}"#.utf8), now: now)
+            throw Failure(description: "Expected MiniMax envelope 401")
+        } catch MiniMaxProviderError.unauthorized { checks += 1 }
+
+        try expect(MiniMaxUsageParser.codingPlanToken(from: "sk-api-fixture") == nil, "A pay-as-you-go key has no plan to meter")
+        try expect(MiniMaxUsageParser.codingPlanToken(from: " Bearer sk-cp-fixture ") == "sk-cp-fixture", "A pasted Bearer prefix is stripped")
+        try expect(MiniMaxUsageParser.codingPlanToken(from: "   ") == nil, "An empty key is not a key")
+        try expect(MiniMaxUsageParser.envelopeStatus(in: Data(#"{"base_resp":{"status_code":1004}}"#.utf8)) == 1004, "Envelope status is read from base_resp")
+        try expect(MiniMaxUsageParser.isRateLimited(status: 200, envelope: 2045), "Overloaded under HTTP 200 is a throttle")
+        try expect(MiniMaxUsageParser.isMissingEndpoint(status: 200, envelope: 1004), "A bearer 1004 means try the other remains path")
+        try expect(!MiniMaxUsageParser.isDeadCredential(status: 200, envelope: 1004), "A bearer 1004 is not a dead key")
+        try expect(MiniMaxRegion(rawValue: "china") == .china && MiniMaxRegion.allCases.count == 2, "Both MiniMax regions are selectable")
+        try expect(MiniMaxRegion.global.apiBase.host == "api.minimax.io" && MiniMaxRegion.china.apiBase.host == "api.minimaxi.com", "Each region has its own API host")
+    }
+
+    static func minimaxNetworking(root: URL, defaults: UserDefaults) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let policy = ProviderRetryPolicy(provider: .minimax, defaults: defaults)
+        let body = #"{"base_resp":{"status_code":0},"current_subscribe_title":"Max","model_remains":[{"model_name":"general","current_interval_total_count":100,"current_interval_usage_count":30,"current_weekly_total_count":100,"current_weekly_usage_count":90}]}"#
+        let provider = MiniMaxUsageProvider(session: session, retryPolicy: policy,
+                                            loadAPIKey: { "sk-cp-fixture" }, resolveRegion: { .global })
+
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, body)]
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .minimax && snapshot.planName == "Max", "MiniMax snapshot names the plan")
+        try expect(snapshot.windows.map(\.usedPercent) == [70, 10], "Both MiniMax windows are reported")
+        let first = FixtureProtocol.requests.last!
+        try expect(first.url?.host == "api.minimax.io" && first.url?.path == "/v1/token_plan/remains", "Token Plan is asked first")
+        try expect(first.httpMethod == "GET" && first.value(forHTTPHeaderField: "Authorization") == "Bearer sk-cp-fixture", "Bearer key on a GET")
+
+        // A host that does not serve Token Plan falls through to the older Coding Plan path.
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(404, "{}"), (200, body)]
+        _ = try await provider.fetchSnapshot()
+        try expect(FixtureProtocol.requests.count == 2, "A missing remains path is retried on the other product")
+        try expect(FixtureProtocol.requests.last!.url?.path == "/v1/api/openplatform/coding_plan/remains", "Coding Plan is the fallback path")
+
+        let china = MiniMaxUsageProvider(session: session, retryPolicy: policy,
+                                         loadAPIKey: { "sk-cp-fixture" }, resolveRegion: { .china })
+        FixtureProtocol.requests = []
+        FixtureProtocol.responses = [(200, body)]
+        _ = try await china.fetchSnapshot()
+        try expect(FixtureProtocol.requests.last!.url?.host == "api.minimaxi.com", "The China region uses its own host")
+
+        FixtureProtocol.responses = [(401, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected MiniMax 401") }
+        catch MiniMaxProviderError.unauthorized { checks += 1 }
+        FixtureProtocol.responses = [(503, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected MiniMax 503") }
+        catch MiniMaxProviderError.server(503) { checks += 1 }
+        FixtureProtocol.responses = [(429, "{}")]
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected MiniMax throttle") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(policy.deadline != nil, "MiniMax persists server backoff")
+        let count = FixtureProtocol.requests.count
+        do { _ = try await provider.fetchSnapshot(); throw Failure(description: "Expected local backoff") }
+        catch is ProviderRetryError { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No MiniMax request during backoff")
+        policy.reset()
+
+        let unpaid = MiniMaxUsageProvider(session: session, retryPolicy: policy, loadAPIKey: { nil }, resolveRegion: { .global })
+        do { _ = try await unpaid.fetchSnapshot(); throw Failure(description: "Expected no MiniMax key") }
+        catch MiniMaxProviderError.notSignedIn { checks += 1 }
+        let payg = MiniMaxUsageProvider(session: session, retryPolicy: policy, loadAPIKey: { "sk-api-fixture" }, resolveRegion: { .global })
+        do { _ = try await payg.fetchSnapshot(); throw Failure(description: "Expected pay-as-you-go key") }
+        catch MiniMaxProviderError.payAsYouGoKey { checks += 1 }
+        try expect(FixtureProtocol.requests.count == count, "No MiniMax request without a plan key")
+    }
+
+    static func gemini(_ root: URL) async throws {
+        let manager = FileManager.default
+        let now = Date()
+        let stamper = ISO8601DateFormatter()
+        stamper.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let stamp = stamper.string(from: now)
+
+        let cliRoot = root.appendingPathComponent("gemini-tmp-\(UUID().uuidString)")
+        let chats = cliRoot.appendingPathComponent("9d2cproject/chats")
+        try manager.createDirectory(at: chats, withIntermediateDirectories: true)
+        // Header, an unanswered turn, the same id written again with usage, a second call, and a
+        // rewind marker: the bill counts ids once, and a rewound call was still charged.
+        let session = chats.appendingPathComponent("session.jsonl")
+        try Data("""
+        {"sessionId":"fixture","projectHash":"9d2c","startTime":"\(stamp)","kind":"main"}
+        {"id":"call-1","timestamp":"\(stamp)","type":"gemini","model":"gemini-2.5-pro"}
+        {"id":"call-1","timestamp":"\(stamp)","type":"gemini","model":"gemini-2.5-pro","tokens":{"input":900,"output":100,"cached":800,"total":1000}}
+        {"id":"call-2","timestamp":"\(stamp)","type":"gemini","tokens":{"total":500}}
+        {"id":"call-3","timestamp":"\(stamp)","type":"user","tokens":{"total":9999}}
+        {"$set":{"lastUpdated":"\(stamp)"}}
+        {"$rewindTo":"call-2"}
+        """.utf8).write(to: session)
+
+        let missingDB = root.appendingPathComponent("no-such.db")
+        let provider = GeminiUsageProvider(cliRoot: cliRoot, openCodeDatabase: missingDB, hermesDatabase: missingDB,
+                                           budget: { 3_000 }, now: { now })
+        let snapshot = try await provider.fetchSnapshot()
+        try expect(snapshot.provider == .gemini && snapshot.costInfo?.totalTokens == 1500, "Answered calls are counted once each")
+        try expect(snapshot.windows.map(\.id) == ["monthly"], "One monthly window")
+        try expect(snapshot.windows[0].label == String(localized: "Monthly limit", bundle: .language), "The window reuses the monthly label")
+        try expect(snapshot.windows[0].usedPercent == 50, "Tokens are measured against the budget")
+        let month = GeminiTokenLedger.calendar.dateInterval(of: .month, for: now)!
+        try expect(snapshot.windows[0].resetsAt == month.end, "The window resets when the month does")
+        try expect(snapshot.windows[0].durationMinutes == Int((month.duration / 60).rounded()), "The duration is this month's length")
+        try expect(snapshot.health == .live, "A readable ledger is live")
+
+        let small = GeminiUsageProvider(cliRoot: cliRoot, openCodeDatabase: missingDB, hermesDatabase: missingDB,
+                                        budget: { 100 }, now: { now })
+        let capped = try await small.fetchSnapshot()
+        try expect(capped.windows[0].usedPercent == 100, "Overrunning the budget never exceeds 100%")
+
+        // A file last written before this month cannot hold this month's calls, so it is skipped
+        // without being parsed, however current its records claim to be.
+        let stale = chats.appendingPathComponent("stale.jsonl")
+        try Data(#"{"id":"old","timestamp":"\#(stamp)","type":"gemini","tokens":{"total":7000}}"#.utf8).write(to: stale)
+        let lastMonth = GeminiTokenLedger.calendar.date(byAdding: .month, value: -1, to: GeminiTokenLedger.startOfMonth(now: now))!
+        try manager.setAttributes([.modificationDate: lastMonth], ofItemAtPath: stale.path)
+        try expect(GeminiTokenLedger.cliTokens(root: cliRoot, now: now) == 1500, "Files untouched this month are not read")
+
+        // An installed tool that has spent nothing is a zero; a tool that was never installed is
+        // not a row at all, and with no rows there is nothing to meter.
+        let emptyRoot = root.appendingPathComponent("gemini-empty-\(UUID().uuidString)")
+        try manager.createDirectory(at: emptyRoot, withIntermediateDirectories: true)
+        try expect(GeminiTokenLedger.cliTokens(root: emptyRoot, now: now) == 0, "An empty CLI root is a zero, not a missing tool")
+        try expect(GeminiTokenLedger.cliTokens(root: root.appendingPathComponent("never"), now: now) == nil, "A missing CLI root is a missing tool")
+        try expect(GeminiTokenLedger.openCodeTokens(database: missingDB, now: now) == nil, "A missing OpenCode database is a missing tool")
+        try expect(GeminiTokenLedger.hermesTokens(database: missingDB, now: now) == nil, "A missing Hermes database is a missing tool")
+        let silent = GeminiUsageProvider(cliRoot: root.appendingPathComponent("never"), openCodeDatabase: missingDB,
+                                         hermesDatabase: missingDB, budget: { 3_000 }, now: { now })
+        do { _ = try await silent.fetchSnapshot(); throw Failure(description: "Expected no Gemini logs") }
+        catch GeminiProviderError.noLogs { checks += 1 }
+
+        // Without a ceiling there is no ring to draw, and zero must not become one.
+        for value in [0, -5] {
+            let unbudgeted = GeminiUsageProvider(cliRoot: cliRoot, openCodeDatabase: missingDB, hermesDatabase: missingDB,
+                                                 budget: { value }, now: { now })
+            do { _ = try await unbudgeted.fetchSnapshot(); throw Failure(description: "Expected no Gemini budget") }
+            catch GeminiProviderError.noBudget { checks += 1 }
+        }
+        try expect(GeminiProviderError.noBudget.errorDescription == String(localized: "Set a monthly token budget in Settings", bundle: .language), "The budget prompt names Settings")
+        if case .unavailable = GeminiProviderError.noBudget.providerHealth { checks += 1 } else {
+            throw Failure(description: "A missing budget is unavailable, not signed out")
+        }
+
+        // Last month's calls in a file written this month are still last month's bill.
+        let old = stamper.string(from: GeminiTokenLedger.startOfMonth(now: now).addingTimeInterval(-86_400))
+        let calls = GeminiUsageParser.calls(from: Data("""
+        {"id":"a","timestamp":"\(old)","type":"gemini","tokens":{"total":4000}}
+        {"id":"b","timestamp":"\(stamp)","type":"gemini","tokens":{"total":25}}
+        {"id":"c","timestamp":"\(stamp)","type":"gemini","tokens":{"total":0}}
+        """.utf8))
+        try expect(calls.count == 3, "Every answered record is decoded")
+        try expect(GeminiUsageParser.monthlyTokens(in: calls, now: now) == 25, "Only this month's non-empty calls are billed")
+        try expect(GeminiUsageParser.date(from: "2026-09-01T09:12:33Z") != nil, "Plain timestamps parse")
+        try expect(GeminiUsageParser.date(from: "2026-09-01T09:12:33.104Z") != nil, "Fractional timestamps parse")
+        try expect(GeminiUsageParser.date(from: "not a date") == nil, "A malformed timestamp is not a date")
     }
 
     static func codenotchUpdates(_ root: URL, _ defaults: UserDefaults) async throws {

@@ -124,6 +124,70 @@ final class UsageStore: ObservableObject {
         didSet { UserDefaults.standard.set(waitingChime, forKey: "sessionChimeWaiting") }
     }
 
+    /// How long a finished or blocked session holds the rail open.
+    @Published var sessionPeekSeconds = UserDefaults.standard.object(forKey: "sessionPeekSeconds") as? Double ?? 5 {
+        didSet { UserDefaults.standard.set(sessionPeekSeconds, forKey: "sessionPeekSeconds") }
+    }
+    /// "12% over pace" under each window that has a length and a reset to pace against.
+    @Published var usagePaceEnabled = UserDefaults.standard.object(forKey: "usagePaceEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(usagePaceEnabled, forKey: "usagePaceEnabled") }
+    }
+    /// Leads Claude with a synthetic window: a seventh of the weekly limit per day. See `DailyPace`.
+    @Published var claudeDailyPaceEnabled = UserDefaults.standard.object(forKey: "claudeDailyPaceEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(claudeDailyPaceEnabled, forKey: "claudeDailyPaceEnabled") }
+    }
+    @Published var resetTimeStyle = ResetTimeStyle(rawValue: UserDefaults.standard.string(forKey: "resetTimeStyle") ?? "") ?? .both {
+        didSet { UserDefaults.standard.set(resetTimeStyle.rawValue, forKey: "resetTimeStyle") }
+    }
+    /// Orders the rail out while a full-screen app owns its display.
+    @Published var hideOverFullScreen = UserDefaults.standard.object(forKey: "hideOverFullScreen") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(hideOverFullScreen, forKey: "hideOverFullScreen") }
+    }
+    /// Percent remaining at which the warning and critical notifications fire.
+    @Published var warnThreshold = UserDefaults.standard.object(forKey: "warnThreshold") as? Double ?? ThresholdNotifier.defaultWarnRemaining {
+        didSet {
+            UserDefaults.standard.set(warnThreshold, forKey: "warnThreshold")
+            thresholdNotifier.warnRemaining = warnThreshold
+            if criticalThreshold > warnThreshold { criticalThreshold = warnThreshold }
+        }
+    }
+    @Published var criticalThreshold = UserDefaults.standard.object(forKey: "criticalThreshold") as? Double ?? ThresholdNotifier.defaultCriticalRemaining {
+        didSet {
+            UserDefaults.standard.set(criticalThreshold, forKey: "criticalThreshold")
+            thresholdNotifier.criticalRemaining = criticalThreshold
+        }
+    }
+    @Published var minimaxRegion = MiniMaxRegion(rawValue: UserDefaults.standard.string(forKey: "minimaxRegion") ?? "") ?? .global {
+        didSet {
+            UserDefaults.standard.set(minimaxRegion.rawValue, forKey: "minimaxRegion")
+            if oldValue != minimaxRegion { invalidate(.minimax); refresh(.minimax) }
+        }
+    }
+    /// The denominator of the Gemini API ring; Google publishes no limit to read.
+    @Published var geminiMonthlyTokenBudget = UserDefaults.standard.integer(forKey: "geminiMonthlyTokenBudget") {
+        didSet {
+            UserDefaults.standard.set(geminiMonthlyTokenBudget, forKey: "geminiMonthlyTokenBudget")
+            if oldValue != geminiMonthlyTokenBudget { refresh(.gemini) }
+        }
+    }
+    /// Bumped when a pasted key is saved or removed, so Settings re-reads the Keychain.
+    @Published private(set) var apiKeyRevision = 0
+
+    func hasStoredAPIKey(for provider: ProviderID) -> Bool {
+        OwnedAPIKey.key(for: provider)?.hasStoredKey ?? false
+    }
+
+    /// Saves a pasted key, or removes the saved one when `key` is empty.
+    @discardableResult
+    func setAPIKey(_ key: String, for provider: ProviderID) -> Bool {
+        guard let owned = OwnedAPIKey.key(for: provider) else { return false }
+        let saved = key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? owned.delete() : owned.store(key)
+        apiKeyRevision += 1
+        invalidate(provider)
+        refresh(provider)
+        return saved
+    }
+
     func chime(for reason: SessionCompletionWatcher.Reason) -> String {
         reason == .finished ? finishedChime : waitingChime
     }
@@ -296,6 +360,7 @@ final class UsageStore: ObservableObject {
         if SMAppService.mainApp.status == .enabled { try await SMAppService.mainApp.unregister() }
         periodicTask?.cancel()
         activityTask?.cancel()
+        activityWatcher = nil
         completionPeekTask?.cancel()
         usageEventPeekTask?.cancel()
         usageEventQueue.removeAll()
@@ -337,13 +402,36 @@ final class UsageStore: ObservableObject {
         activityEnabled && enabledProviders.contains(provider) ? sessions.filter { $0.provider == provider } : []
     }
 
+    /// The poll's pause between readings, held so a registry change can cut it short.
+    private var activityPause: Task<Void, Never>?
+    private var activityWatcher: DirectoryWatcher?
+    private var activityPokePending = false
+
+    /// A burst of registry writes becomes one early poll, a beat after the first.
+    private func pokeActivity() {
+        guard !activityPokePending else { return }
+        activityPokePending = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            self?.activityPokePending = false
+            self?.activityPause?.cancel()
+        }
+    }
+
     private func configureActivity() {
         activityTask?.cancel()
+        activityPause?.cancel()
+        activityWatcher = nil
         sessions = []
         completionWatcher = SessionCompletionWatcher()
         completionPeekTask?.cancel()
         completionPeek = nil
         guard !isPreview, activityEnabled, enabledProviders.contains(where: \.supportsActivity) else { return }
+        activityWatcher = DirectoryWatcher(
+            directories: visibleProviders.filter { $0.kind == .claude }.map { ClaudeProfile(provider: $0).sessionsDirectory }
+        ) { [weak self] in
+            Task { @MainActor [weak self] in self?.pokeActivity() }
+        }
         activityTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let reader = self?.activityReader else { return }
@@ -359,8 +447,9 @@ final class UsageStore: ObservableObject {
                     let launchedAt = app.map { $0.launchDate ?? .distantPast }
                     found += await reader.readCursorSessions(launchedAt: launchedAt, includeIdle: true)
                 }
-                // Codex and Antigravity are inferred from write recency: an eight-second pause is
-                // a think, not a finish, so they never become idle and never announce completion.
+                // Antigravity, and Codex without a rollout lifecycle, are inferred from write
+                // recency: an eight-second pause is a think, not a finish, so they never become
+                // idle and never announce completion. A Codex rollout's `task_complete` does.
                 for provider in enabled where provider.kind == .codex {
                     found += await reader.readCodexSessions(provider: provider, codexHome: CodexProfile(provider: provider).directory)
                 }
@@ -381,18 +470,20 @@ final class UsageStore: ObservableObject {
                             self.sessionCompletions.send(event)
                             self.completionPeekTask?.cancel()
                             self.completionPeekTask = Task { [weak self] in
-                                try? await Task.sleep(for: .seconds(5))
+                                try? await Task.sleep(for: .seconds(self?.sessionPeekSeconds ?? 5))
                                 guard !Task.isCancelled else { return }
                                 self?.completionPeek = nil
                             }
                         }
                     }
-                    // Idle Cursor chats exist only so the watcher can see a run end; the card
+                    // Idle Cursor chats and finished Codex turns exist only so the watcher can see a run end; the card
                     // keeps showing working and waiting chats, as it always has.
-                    let shown = found.filter { !($0.provider == .cursor && $0.state == .idle) }
+                    let shown = found.filter { !(($0.provider == .cursor || $0.provider.kind == .codex) && $0.state == .idle) }
                     if self.sessions != shown { self.sessions = shown }
                 }
-                try? await Task.sleep(for: .seconds(5))
+                let pause = Task<Void, Never> { _ = try? await Task.sleep(for: .seconds(5)) }
+                self?.activityPause = pause
+                await pause.value
             }
         }
     }
@@ -486,7 +577,10 @@ final class UsageStore: ObservableObject {
         }
         providers = [.cursor: CursorUsageProvider(),
                      .antigravity: AntigravityUsageProvider(), .glm: GLMUsageProvider(), .grok: GrokUsageProvider(),
-                     .opencode: OpenCodeUsageProvider(), .copilot: GitHubCopilotProvider()]
+                     .opencode: OpenCodeUsageProvider(), .copilot: GitHubCopilotProvider(),
+                     .kimi: KimiUsageProvider(), .commandcode: CommandCodeUsageProvider(), .devin: DevinUsageProvider(),
+                     .kiro: KiroUsageProvider(), .ollama: OllamaUsageProvider(), .minimax: MiniMaxUsageProvider(),
+                     .gemini: GeminiUsageProvider()]
         for profile in profiles {
             providers[profile.provider] = ClaudeUsageProvider(profile: profile, selectedSource: {
                 ClaudeSource(rawValue: UserDefaults.standard.string(forKey: Keys.claudeSource) ?? "") ?? .desktop
@@ -522,6 +616,8 @@ final class UsageStore: ObservableObject {
         verticalPosition = max(0.0, min(1.0, savedVertical))
         let savedScale = UserDefaults.standard.object(forKey: Keys.railScale) as? Double ?? 1.0
         railScale = max(0.70, min(1.40, savedScale))
+        thresholdNotifier.warnRemaining = warnThreshold
+        thresholdNotifier.criticalRemaining = criticalThreshold
         if let forced = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_GLASS"] {
             glassEnabled = forced == "1"   // debug aid; not persisted
         }
@@ -619,8 +715,16 @@ final class UsageStore: ObservableObject {
 
     func snapshot(for provider: ProviderID) -> UsageSnapshot {
         var value = snapshots[provider] ?? .placeholder(for: provider)
+        if claudeDailyPaceEnabled { value = DailyPace.apply(to: value) }
         value.headlineWindowID = headlineWindows[provider.rawValue] ?? value.headlineWindowID
         return value
+    }
+
+    /// What the rail shows when the user has picked no window: the provider's own default, or
+    /// the daily pace leading it.
+    func defaultHeadlineID(for provider: ProviderID) -> String? {
+        let value = snapshots[provider] ?? .placeholder(for: provider)
+        return (claudeDailyPaceEnabled ? DailyPace.apply(to: value) : value).headlineWindowID
     }
 
     func setProvider(_ provider: ProviderID, enabled: Bool) {
@@ -688,7 +792,8 @@ final class UsageStore: ObservableObject {
     /// never inherits the 60 s "active" cadence the local providers can afford.
     private func refreshIfIdle(_ provider: ProviderID, for interval: TimeInterval) {
         let last = lastRefreshStarted[provider] ?? .distantPast
-        let floor: TimeInterval = (provider.kind == .claude || provider.kind == .grok) ? 300 : 0
+        // Kiro is a subprocess per reading, which is not worth spawning every minute either.
+        let floor: TimeInterval = [.claude, .grok, .kiro].contains(provider.kind) ? 300 : 0
         guard Date().timeIntervalSince(last) >= max(interval, floor) else { return }
         refresh(provider)
     }

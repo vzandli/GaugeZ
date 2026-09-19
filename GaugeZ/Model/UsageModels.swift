@@ -3,7 +3,7 @@ import Foundation
 /// A rail entry identifies a provider and, for Claude Code, an isolated profile.
 /// The original string IDs remain unchanged so existing preferences and caches migrate.
 struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, CaseIterable {
-    enum Kind: String, Sendable { case claude, cursor, codex, antigravity, glm, grok, opencode, copilot }
+    enum Kind: String, Sendable { case claude, cursor, codex, antigravity, glm, grok, opencode, copilot, kimi, commandcode, devin, kiro, ollama, minimax, gemini }
     let kind: Kind
     let profileSlug: String?
 
@@ -20,7 +20,15 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     static let grok = Self(kind: .grok)
     static let opencode = Self(kind: .opencode)
     static let copilot = Self(kind: .copilot)
-    static let allCases: [Self] = [.claude, .cursor, .codex, .antigravity, .glm, .grok, .opencode, .copilot]
+    static let kimi = Self(kind: .kimi)
+    static let commandcode = Self(kind: .commandcode)
+    static let devin = Self(kind: .devin)
+    static let kiro = Self(kind: .kiro)
+    static let ollama = Self(kind: .ollama)
+    static let minimax = Self(kind: .minimax)
+    static let gemini = Self(kind: .gemini)
+    static let allCases: [Self] = [.claude, .cursor, .codex, .antigravity, .glm, .grok, .opencode, .copilot,
+                                   .kimi, .commandcode, .devin, .kiro, .ollama, .minimax, .gemini]
 
     init?(rawValue: String) {
         if let kind = Kind(rawValue: rawValue) {
@@ -41,7 +49,7 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     var supportsActivity: Bool {
         switch kind {
         case .claude, .cursor, .grok, .codex, .antigravity: true
-        case .glm, .opencode, .copilot: false
+        case .glm, .opencode, .copilot, .kimi, .commandcode, .devin, .kiro, .ollama, .minimax, .gemini: false
         }
     }
 
@@ -49,8 +57,11 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
     /// writes to local logs and labeled as such.
     var activityIsInferred: Bool { kind == .codex || kind == .antigravity }
 
+    /// Providers GaugeZ cannot read without something from the user: a pasted key or a budget.
+    var needsSetup: Bool { kind == .ollama || kind == .minimax || kind == .gemini }
+
     /// Providers without a bundled logo asset draw an SF Symbol instead.
-    var usesSymbolLogo: Bool { kind == .glm || kind == .opencode }
+    var usesSymbolLogo: Bool { kind == .glm || kind == .opencode || kind == .kiro || kind == .gemini }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -76,6 +87,13 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .grok: "Grok Build"
         case .opencode: "OpenCode"
         case .copilot: "GitHub Copilot"
+        case .kimi: "Kimi"
+        case .commandcode: "Command Code"
+        case .devin: "Devin"
+        case .kiro: "Kiro"
+        case .ollama: "Ollama"
+        case .minimax: "MiniMax"
+        case .gemini: "Gemini API"
         }
     }
 
@@ -89,6 +107,13 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .grok: "g.circle.fill"
         case .opencode: "terminal.fill"
         case .copilot: "c.circle.fill"
+        case .kimi: "k.circle.fill"
+        case .commandcode: "command"
+        case .devin: "d.circle.fill"
+        case .kiro: "k.square.fill"
+        case .ollama: "o.circle.fill"
+        case .minimax: "m.circle.fill"
+        case .gemini: "sparkle"
         }
     }
 
@@ -102,6 +127,13 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .grok: "GrokLogo"
         case .opencode: "OpenCodeLogo"
         case .copilot: "CopilotLogo"
+        case .kimi: "KimiLogo"
+        case .commandcode: "CommandCodeLogo"
+        case .devin: "DevinLogo"
+        case .kiro: "KiroLogo"
+        case .ollama: "OllamaLogo"
+        case .minimax: "MiniMaxLogo"
+        case .gemini: "GeminiLogo"
         }
     }
 
@@ -119,6 +151,13 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .grok: URL(string: "https://docs.x.ai/build/overview")
         case .opencode: URL(string: "https://opencode.ai")
         case .copilot: URL(string: "https://github.com/settings/copilot")
+        case .kimi: URL(string: "https://www.kimi.com/code/console")
+        case .commandcode: URL(string: "https://commandcode.ai")
+        case .devin: URL(string: "https://windsurf.com/subscription/usage")
+        case .kiro: URL(string: "https://app.kiro.dev/account/usage")
+        case .ollama: URL(string: "https://ollama.com/settings")
+        case .minimax: URL(string: "https://platform.minimax.io/user-center/payment/coding-plan")
+        case .gemini: URL(string: "https://aistudio.google.com/usage")
         }
     }
 
@@ -136,6 +175,13 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .grok: String(localized: "Reads Grok Build’s xAI account sign-in from ~/.grok/auth.json and asks its billing service for the allowance.", bundle: .language)
         case .opencode: String(localized: "Reads OpenCode Go plan usage with the opencode-go key OpenCode stores on sign-in.", bundle: .language)
         case .copilot: String(localized: "Reads Copilot quotas using GH_TOKEN or the GitHub CLI sign-in. Run gh auth login to connect.", bundle: .language)
+        case .kimi: String(localized: "Reads Kimi Code usage with the sign-in the kimi CLI keeps in ~/.kimi-code.", bundle: .language)
+        case .commandcode: String(localized: "Reads Command Code credits with the sign-in its CLI keeps in ~/.commandcode.", bundle: .language)
+        case .devin: String(localized: "Reads Devin and Windsurf plan usage with the editor's local sign-in.", bundle: .language)
+        case .kiro: String(localized: "Reads Kiro's monthly credits with the kiro-cli sign-in.", bundle: .language)
+        case .ollama: String(localized: "Reads Ollama cloud usage with an API key you add in Settings, or OLLAMA_API_KEY.", bundle: .language)
+        case .minimax: String(localized: "Reads MiniMax Coding Plan usage with a key you add in Settings.", bundle: .language)
+        case .gemini: String(localized: "Counts Gemini tokens from local CLI logs against a monthly budget you set.", bundle: .language)
         }
     }
 }
@@ -233,6 +279,29 @@ struct UsageWindow: Identifiable, Equatable, Sendable, Codable {
     let usedPercent: Double
     let resetsAt: Date?
     let durationMinutes: Int?
+    /// Meters a side feature (Codex Spark, code review): listed on the card, but never the
+    /// automatic headline and never a limit event.
+    var isExtra = false
+
+    init(id: String, label: String, usedPercent: Double, resetsAt: Date?, durationMinutes: Int?, isExtra: Bool = false) {
+        self.id = id
+        self.label = label
+        self.usedPercent = usedPercent
+        self.resetsAt = resetsAt
+        self.durationMinutes = durationMinutes
+        self.isExtra = isExtra
+    }
+
+    /// Caches written before `isExtra` existed carry no such key.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        usedPercent = try container.decode(Double.self, forKey: .usedPercent)
+        resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
+        durationMinutes = try container.decodeIfPresent(Int.self, forKey: .durationMinutes)
+        isExtra = try container.decodeIfPresent(Bool.self, forKey: .isExtra) ?? false
+    }
 
     var remainingPercent: Double {
         max(0, min(100, 100 - usedPercent))
@@ -258,6 +327,37 @@ struct CodexResetCredits: Equatable, Sendable, Codable {
     }
 
     var nextExpiry: Date? { available.compactMap(\.expiresAt).min() }
+}
+
+/// One day of Codex token use, as ChatGPT's profile endpoint buckets it.
+struct DailyTokenBucket: Equatable, Sendable, Codable, Identifiable {
+    /// `yyyy-MM-dd`, in the account's own reckoning.
+    let day: String
+    let tokens: Int
+    var id: String { day }
+
+    /// The last `count` calendar days ending today, with quiet days filled in as zero.
+    static func recent(_ buckets: [DailyTokenBucket], days count: Int = 30, now: Date = .now, calendar: Calendar = .current) -> [DailyTokenBucket] {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        let known = Dictionary(buckets.map { (String($0.day.prefix(10)), $0.tokens) }, uniquingKeysWith: max)
+        return (0..<count).reversed().compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: now) else { return nil }
+            let key = formatter.string(from: date)
+            return DailyTokenBucket(day: key, tokens: known[key] ?? 0)
+        }
+    }
+
+    static func compact(_ tokens: Int) -> String {
+        switch tokens {
+        case 1_000_000...: String(format: "%.1fM", Double(tokens) / 1_000_000)
+        case 1_000...: String(format: "%.0fk", Double(tokens) / 1_000)
+        default: "\(tokens)"
+        }
+    }
 }
 
 struct ProviderCostInfo: Codable, Equatable, Sendable {
@@ -345,6 +445,8 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
     let resetCredits: CodexResetCredits?
 
     var headlineWindowID: String? = nil
+    /// Codex only: daily token totals for the card's chart.
+    var dailyTokens: [DailyTokenBucket]? = nil
 
     var headlineWindow: UsageWindow? {
         if let headlineWindowID {
@@ -357,8 +459,9 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
 
     /// An exhausted window does not displace a usable one unless every window is exhausted.
     static func automaticHeadline(in windows: [UsageWindow]) -> UsageWindow? {
-        let usable = windows.filter { !$0.isExhausted }
-        let pool = usable.isEmpty ? windows : usable
+        let main = windows.contains { !$0.isExtra } ? windows.filter { !$0.isExtra } : windows
+        let usable = main.filter { !$0.isExhausted }
+        let pool = usable.isEmpty ? main : usable
         return pool.min { $0.remainingPercent < $1.remainingPercent }
     }
 
@@ -406,7 +509,7 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
 
     /// Keeps the last valid values but marks them with a new health state.
     func withHealth(_ health: ProviderHealth) -> UsageSnapshot {
-        UsageSnapshot(
+        var copy = UsageSnapshot(
             provider: provider,
             accountID: accountID,
             planName: planName,
@@ -419,10 +522,12 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
             derivedRequestCount: derivedRequestCount,
             resetCredits: resetCredits
         )
+        copy.dailyTokens = dailyTokens
+        return copy
     }
 
     func withResetCredits(_ credits: CodexResetCredits?) -> UsageSnapshot {
-        UsageSnapshot(
+        var copy = UsageSnapshot(
             provider: provider,
             accountID: accountID,
             planName: planName,
@@ -435,6 +540,8 @@ struct UsageSnapshot: Identifiable, Equatable, Sendable {
             derivedRequestCount: derivedRequestCount,
             resetCredits: credits
         )
+        copy.dailyTokens = dailyTokens
+        return copy
     }
 }
 
@@ -491,6 +598,22 @@ enum DisplayMode: String, CaseIterable, Identifiable, Sendable {
         case .always: String(localized: "Always show", bundle: .language)
         case .hover: String(localized: "Show on hover", bundle: .language)
         case .hidden: String(localized: "Hide", bundle: .language)
+        }
+    }
+}
+
+/// How a window's reset is written on the cards: the clock time, the time left, or both.
+enum ResetTimeStyle: String, CaseIterable, Identifiable, Sendable {
+    case both
+    case clock
+    case countdown
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .both: String(localized: "Date and time left", bundle: .language)
+        case .clock: String(localized: "Reset date", bundle: .language)
+        case .countdown: String(localized: "Time left", bundle: .language)
         }
     }
 }

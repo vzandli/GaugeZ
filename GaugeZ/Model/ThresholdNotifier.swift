@@ -9,14 +9,22 @@ struct ThresholdAlert: Equatable, Sendable {
     let resetsAt: Date?
 }
 
-/// Highest crossing stays latched until a fresh reading falls below 80% used.
+/// Highest crossing stays latched until a fresh reading climbs back above the warning level.
+/// Levels keep their original names: 80 is the warning, 100 the critical one.
 struct ThresholdNotifier {
+    static let defaultWarnRemaining: Double = 20
+    static let defaultCriticalRemaining: Double = 0
+
+    /// Percent remaining at which each alert fires; the critical one never sits above the warning.
+    var warnRemaining = defaultWarnRemaining
+    var criticalRemaining = defaultCriticalRemaining
+
     private var crossed: [ProviderID: Int] = [:]
 
     mutating func observe(_ snapshot: UsageSnapshot, muted: Bool = false) -> [ThresholdAlert] {
         guard snapshot.health == .live, let window = snapshot.headlineWindow,
               window.usedPercent.isFinite else { return [] }
-        let level = window.remainingPercent <= 0 ? 100 : window.remainingPercent <= 20 ? 80 : 0
+        let level = window.remainingPercent <= min(criticalRemaining, warnRemaining) ? 100 : window.remainingPercent <= warnRemaining ? 80 : 0
         let previous = crossed[snapshot.provider, default: 0]
         crossed[snapshot.provider] = level == 0 ? 0 : max(previous, level)
         guard !muted else { return [] }
@@ -49,7 +57,7 @@ final class ThresholdAlerts: NSObject, UNUserNotificationCenterDelegate {
             for alert in alerts {
                 guard !Task.isCancelled else { return }
                 let content = UNMutableNotificationContent()
-                let title = alert.threshold == 100
+                let title = alert.remaining <= 0
                     ? String.localizedStringWithFormat(String(localized: "%@ limit reached", bundle: .language), alert.provider.displayName)
                     : String.localizedStringWithFormat(String(localized: "%@: %@%% left", bundle: .language), alert.provider.displayName, PercentCopy.text(alert.remaining))
                 content.title = title

@@ -7,7 +7,8 @@
 **Your AI subscription limits, one glance away.**
 
 A native macOS edge rail showing remaining quota for Claude, Codex, Cursor, Antigravity,
-GLM, Grok Build, OpenCode, and GitHub Copilot.
+GLM, Grok Build, OpenCode, GitHub Copilot, Kimi, Command Code, Devin, Kiro, Ollama, MiniMax,
+and the Gemini API.
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)](#building)
@@ -30,19 +31,22 @@ rail on the edge of your screen. Hover to expand it, read the rings, get back to
 - **Edge rail, not a window.** A slim tab on any edge of any display. It expands on hover,
   never steals focus, and follows you across Spaces. On a MacBook it joins the hardware notch.
 - **Remaining, never used.** Each ring shows what is left in the most constrained window.
-  The detail card lists every window with its reset time.
+  The detail card lists every window with its reset time, and whether you are spending
+  faster or slower than the window is passing. Claude can lead with a daily budget: a
+  seventh of the weekly limit per day.
 - **Honest states.** Live, stale, signed out, permission needed, and unavailable are
   distinct. Missing data is never shown as `0%`.
 - **Limit events.** The rail opens a card when a window reaches 0% remaining and again when
-  it rolls over, with optional chimes; system notifications fire at 20% and 0% remaining.
+  it rolls over, with optional chimes; system notifications fire at warning and critical
+  levels you choose (20% and 0% remaining by default).
   All of it is tuned in **Settings → Notifications** and mutable per provider.
 - **Session activity.** Optional. See which Claude Code, Cursor, Grok Build, Codex, and
   Antigravity sessions are working, waiting, or idle. The rail can peek and chime when a
   session finishes or needs input, and clicking it lands on the session's own terminal tab
-  in Terminal.app, iTerm2, and cmux.
+  in Terminal.app, iTerm2, Ghostty, and cmux.
 - **Multiple Claude Code accounts.** Each `~/.claude-*` profile gets its own ring.
-- **Make it yours.** Reorder providers, resize the notch, pick an edge and display, choose
-  glass or solid, and decide whether GaugeZ shows in the Dock, the menu bar, or neither.
+- **Make it yours.** Reorder providers, resize the notch, pick an edge and display or drag
+  the rail to another edge, hide it over full-screen apps, choose glass or solid, and decide whether GaugeZ shows in the Dock, the menu bar, or neither.
 - **Automatic updates.** Signed with EdDSA and delivered through Sparkle.
 - **In your language.** English and 21 other languages, switchable in
   **Settings → General** without a restart.
@@ -59,6 +63,13 @@ rail on the edge of your screen. Hover to expand it, read the rings, get back to
 | **Grok Build** | The xAI sign-in in `~/.grok/auth.json`, via its billing service |
 | **GitHub Copilot** | `GH_TOKEN`, the `gh` host token, or `gh auth token` |
 | **OpenCode** | The Go plan usage endpoint with the key OpenCode stores on sign-in |
+| **Kimi** | The Kimi Code usage endpoint with the sign-in the `kimi` CLI keeps in `~/.kimi-code` |
+| **Command Code** | The billing endpoints with the sign-in in `~/.commandcode` |
+| **Devin** | Devin / Windsurf plan status with the editor's local sign-in, or the `devin` CLI's |
+| **Kiro** | Monthly credits as `kiro-cli` reports them |
+| **Ollama** | Ollama cloud usage with an API key you paste in Settings, or `OLLAMA_API_KEY` |
+| **MiniMax** | Coding Plan usage with a key you paste in Settings |
+| **Gemini API** | Tokens counted from local Gemini CLI, OpenCode, and Hermes logs against a monthly budget you set |
 
 Providers are independent. A failure in one never affects another, and each can be
 switched off in Settings. New providers start disabled on existing installations.
@@ -77,7 +88,10 @@ Spanish, Tamil, Telugu, Turkish, Urdu, and Vietnamese.
 GaugeZ is a local companion. It talks only to the providers you enable, using the sign-ins
 their apps already hold.
 
-- Tokens are never written to disk or logged. Keychain items are cached in memory and
+- Borrowed tokens are never written to disk or logged. The only secrets GaugeZ stores are
+  API keys you paste yourself (Ollama, MiniMax), kept in your login Keychain and deleted
+  when you remove them.
+- Keychain items are cached in memory and
   re-read only when they change or you retry.
 - Session activity reads local metadata. When Claude supplies no status, GaugeZ reads up to
   64 KB from the end of its local transcript to infer activity. Transcript text is never stored
@@ -102,8 +116,8 @@ backoff and turns stale once its reset time passes.
 
 ## Install
 
-1. Download `GaugeZ-x.y.z.zip` from the [latest release](https://github.com/vzandli/GaugeZ/releases/latest).
-2. Move **GaugeZ.app** to Applications and launch it.
+1. Download `GaugeZ-x.y.z.dmg` from the [latest release](https://github.com/vzandli/GaugeZ/releases/latest).
+2. Open it, drag **GaugeZ** to Applications, and launch it.
 
 The app is signed with a Developer ID certificate and notarized by Apple.
 
@@ -161,6 +175,8 @@ guessed number when the upstream format changes.
 
 ## Thanks
 
-Claude transcript activity handling, the GitHub Copilot and GLM rings, the Grok and Copilot logos, and terminal tab focus on session click are adapted from Codenotch
+Claude transcript activity handling, Codex turn detection, usage pace, the full-screen check,
+the GitHub Copilot, GLM, Kimi, Command Code, Devin, Kiro, Ollama, MiniMax, and Gemini API rings,
+several provider logos, and terminal tab focus on session click are adapted from Codenotch
 (MIT); see [Third-party notices](GaugeZ/Resources/ThirdPartyNotices.txt).
 Edge rail design inspiration: [@hivinz_](https://x.com/hivinz_).

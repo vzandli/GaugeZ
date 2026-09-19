@@ -9,14 +9,16 @@ import Foundation
 /// * **Terminal.app** and **iTerm2** match a tab by tty.
 /// * **cmux** matches a terminal panel by the surface id its own process tree carries in
 ///   its environment, falling back to the session's working directory.
-/// * Everything else (Warp, Ghostty) publishes nothing, so the caller falls back to
-///   raising the app — the honest answer rather than a silent no-op.
+/// * **Ghostty** (1.3+) scripts its terminals with a working directory but no tty, so it is
+///   matched by the session's cwd like cmux; `focus` selects the tab and raises its window.
+/// * Everything else (Warp) publishes nothing, so the caller falls back to raising the
+///   app — the honest answer rather than a silent no-op.
 ///
 /// Adapted from Codenotch (MIT); see Resources/ThirdPartyNotices.txt.
 enum TerminalTabFocus {
     /// The terminals whose scripting interface can name a tab. Everything else is not
     /// worth a process read or a subprocess.
-    static let supportedBundleIDs: Set<String> = ["com.cmuxterm.app", "com.apple.Terminal", "com.googlecode.iterm2"]
+    static let supportedBundleIDs: Set<String> = ["com.cmuxterm.app", "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty"]
 
     static func supports(_ bundleID: String?) -> Bool {
         bundleID.map(supportedBundleIDs.contains) ?? false
@@ -64,6 +66,28 @@ enum TerminalTabFocus {
                           select s
                           select t
                           select w
+                          return "found"
+                        end if
+                      end repeat
+                    end repeat
+                  end repeat
+                end tell
+                """)
+        case "com.mitchellh.ghostty":
+            // Ghostty's `working directory` comes from shell integration (OSC 7) and names the
+            // shell's directory, which is the session's cwd for a CLI started from the prompt.
+            // Two tabs in one folder are a tie the dictionary cannot break; the first wins.
+            guard let cwd else { return false }
+            let condition = cmuxPathCandidates(cwd)
+                .map { "working directory of term is \"\(appleScriptEscaped($0))\"" }
+                .joined(separator: " or ")
+            return runOsascript("""
+                tell application "Ghostty"
+                  repeat with w in windows
+                    repeat with t in tabs of w
+                      repeat with term in terminals of t
+                        if \(condition) then
+                          focus term
                           return "found"
                         end if
                       end repeat

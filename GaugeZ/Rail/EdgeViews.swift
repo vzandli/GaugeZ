@@ -721,10 +721,24 @@ struct EdgeRailView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            // "Keep open" is the Always show mode under the name the menu needs.
+            Toggle(isOn: Binding(
+                get: { store.displayMode == .always },
+                set: { store.displayMode = $0 ? .always : .hover }
+            )) {
+                Label("Keep Open", systemImage: "pin")
+            }
+
             Button {
                 store.refresh()
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
+            }
+
+            Button {
+                NotificationCenter.default.post(name: .gaugezOpenSettings, object: nil)
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
             }
 
             Button {

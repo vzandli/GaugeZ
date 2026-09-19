@@ -50,7 +50,7 @@ struct UsageEventWatcher {
     mutating func observe(_ snapshot: UsageSnapshot, muted: Bool = false) -> [UsageEvent] {
         guard snapshot.health == .live else { return [] }
         var events: [UsageEvent] = []
-        for window in snapshot.windows {
+        for window in snapshot.windows where !window.isExtra {
             let used = window.usedPercent
             guard used.isFinite else { continue }
             let key = snapshot.provider.rawValue + "\u{1}" + window.id
