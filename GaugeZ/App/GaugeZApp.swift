@@ -46,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        store.$displayMode.dropFirst().removeDuplicates().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateQuietPlace() }.store(in: &cancellables)
         rebuildPanels()
         store.$selectedDisplayID.dropFirst().removeDuplicates().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.rebuildPanels() }.store(in: &cancellables)
@@ -61,6 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
         configureMainMenu()
+        // The readings follow every change to the store, a beat later so a refresh of several
+        // providers redraws the item once; the store's own clock ticks the countdowns.
+        store.objectWillChange
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateStatusReadings() }
+            .store(in: &cancellables)
         settingsObserver = NotificationCenter.default.addObserver(
             forName: .gaugezOpenSettings, object: nil, queue: .main
         ) { [weak self] _ in
@@ -106,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelDisplayIDs = Self.currentDisplayIDs
         let ids: [String?] = store.selectedDisplayID == "all"
             ? NSScreen.screens.map { DisplayChoice.identifier(for: $0) } : [nil]
-        edgePanelControllers = ids.map { EdgePanelController(store: store, displayID: $0) }
+        edgePanelControllers = ids.map { EdgePanelController(store: store, updates: updateManager, displayID: $0) }
         for panel in edgePanelControllers { panel.show() }
     }
 
@@ -139,7 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
         }
-        updateManager.hasMenuBarPresence = presence.wantsStatusItem
+        updateQuietPlace()
+    }
+
+    /// A scheduled update is announced quietly — on the rail and in the menu — whenever there
+    /// is somewhere to announce it; with neither, Sparkle's own alert is let through.
+    private func updateQuietPlace() {
+        updateManager.hasMenuBarPresence = store.appPresence.wantsStatusItem || store.displayMode != .hidden
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -244,16 +258,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = item.button {
-            let image = NSImage(named: "GaugeZMenuBar")
-                ?? NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "GaugeZ")
-            image?.isTemplate = true
-            image?.size = NSSize(width: 18, height: 18)
-            button.image = image
-            button.imageScaling = .scaleProportionallyDown
-        }
         item.menu = makeMenu()
         statusItem = item
+        shownReadings = []
+        updateStatusReadings()
+    }
+
+    private var statusIcon: NSImage? {
+        let image = NSImage(named: "GaugeZMenuBar")
+            ?? NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "GaugeZ")
+        image?.isTemplate = true
+        image?.size = NSSize(width: 18, height: 18)
+        return image
+    }
+
+    private var shownReadings: [MenuBarReadings.Reading] = []
+
+    /// The chosen accounts' readings in place of the icon, or the icon when none are chosen.
+    private func updateStatusReadings() {
+        guard let item = statusItem, let button = item.button else { return }
+        let readings = MenuBarReadings.readings(for: store.menuBarProviders, store: store)
+        guard readings != shownReadings || button.image == nil else { return }
+        shownReadings = readings
+        if let image = MenuBarReadings.image(for: readings) {
+            item.length = NSStatusItem.variableLength
+            button.image = image
+            button.imageScaling = .scaleNone
+            button.setAccessibilityLabel(readings.map { "\($0.provider.displayName) \($0.text)" }.joined(separator: ", "))
+            // Debug aid: with GAUGEZ_DEBUG_SNAPSHOTS set, the drawn readings land beside the panel shots.
+            if let directory = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_SNAPSHOTS"],
+               let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("menubar.png"))
+            }
+        } else {
+            item.length = NSStatusItem.squareLength
+            button.image = statusIcon
+            button.imageScaling = .scaleProportionallyDown
+            button.setAccessibilityLabel("GaugeZ")
+        }
     }
 
     /// Status-item shortcuts alone only work while that menu is open. A main menu makes Usage,
@@ -276,6 +319,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let providers = NSMenuItem(title: String(localized: "Refresh Provider", bundle: .language), action: nil, keyEquivalent: "")
         providers.submenu = NSMenu()
         menu.addItem(providers)
+        let readings = NSMenuItem(title: String(localized: "Readings in Menu Bar", bundle: .language), action: nil, keyEquivalent: "")
+        readings.submenu = NSMenu()
+        readings.tag = Self.menuBarReadingsTag
+        menu.addItem(readings)
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Check for Updates…", bundle: .language), action: #selector(checkForUpdates), keyEquivalent: "")
         let settingsItem = menu.addItem(withTitle: String(localized: "Settings…", bundle: .language), action: #selector(openSettingsWindow), keyEquivalent: ",")
@@ -302,6 +349,12 @@ extension AppDelegate: NSMenuDelegate {
 
     /// Marks the per-provider usage lines, which are rebuilt every time the menu opens.
     private static let usageLineTag = 900
+    private static let menuBarReadingsTag = 901
+
+    @objc private func toggleMenuBarReading(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let provider = ProviderID(rawValue: raw) else { return }
+        store.setMenuBarReading(provider, shown: sender.state != .on)
+    }
 
     /// One line per provider at the top of the menu: the headline reading, or why there is none.
     /// Clicking a line refetches that provider.
@@ -336,7 +389,16 @@ extension AppDelegate: NSMenuDelegate {
 
     private func syncMenuState(_ menu: NSMenu) {
         rebuildUsageLines(in: menu)
-        if let submenu = menu.items.first(where: { $0.submenu != nil })?.submenu {
+        if let submenu = menu.items.first(where: { $0.tag == Self.menuBarReadingsTag })?.submenu {
+            submenu.removeAllItems()
+            for provider in store.visibleProviders {
+                let item = submenu.addItem(withTitle: provider.displayName, action: #selector(toggleMenuBarReading(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = provider.rawValue
+                item.state = store.menuBarProviderIDs.contains(provider.rawValue) ? .on : .off
+            }
+        }
+        if let submenu = menu.items.first(where: { $0.submenu != nil && $0.tag != Self.menuBarReadingsTag })?.submenu {
             submenu.removeAllItems()
             for provider in store.visibleProviders {
                 let item = submenu.addItem(withTitle: provider.displayName, action: #selector(refreshProvider(_:)), keyEquivalent: "")

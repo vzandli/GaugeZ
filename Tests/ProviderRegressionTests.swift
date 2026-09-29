@@ -166,10 +166,25 @@ struct ProviderRegressionTests {
         try expect(FullScreenDetector.isFullScreen(screenBounds: screen, frontmostPID: 7, windows: [(7, 0, CGRect(x: 0, y: 38, width: 1512, height: 944))], safeAreaTopInset: 38), "Below the camera housing still counts")
         try expect(!FullScreenDetector.isFullScreen(screenBounds: screen, frontmostPID: 7, windows: [(7, 0, CGRect(x: 0, y: 38, width: 1512, height: 860)), (8, 0, screen), (7, 25, screen)]), "A maximized window, another app, or an overlay layer does not")
 
-        let frame = CGRect(x: 0, y: 0, width: 1000, height: 800)
-        try expect(EdgeDropZone.target(pointer: CGPoint(x: 500, y: 790), in: frame, current: .right) == .top, "Carrying the rail to the top edge offers the top")
-        try expect(EdgeDropZone.target(pointer: CGPoint(x: 990, y: 400), in: frame, current: .right) == nil && EdgeDropZone.target(pointer: CGPoint(x: 500, y: 400), in: frame, current: .right) == nil, "The current edge and the middle of the screen offer nothing")
-        try expect(EdgeDropZone.target(pointer: CGPoint(x: 5, y: 30), in: frame, current: .right) == .left, "A corner goes to the nearer edge")
+        let track = BorderTrack(frame: CGRect(x: 0, y: 100, width: 1000, height: 800))
+        try expect(track.perimeter == 3600 && track.place(at: 1200) == (.right, 200) && track.place(at: -100) == (.left, 700), "The border runs clockwise from the top-left and wraps")
+        try expect(track.along(.top, of: 1050) == 1050 && track.along(.right, of: 950) == -50, "A rail reaching past a corner is laid along both edges' lines")
+        try expect(track.edges(spannedBy: 1000, length: 300) == [.top, .right] && track.edges(spannedBy: 500, length: 300) == [.top], "A rail at a corner spans both edges")
+        let nearCorner = CGPoint(x: 950, y: 850)
+        try expect(track.reading(of: nearCorner, nearest: .top) == .corner(.topRight) && track.place(of: nearCorner, by: .corner(.topRight)) == 1000, "Near a corner the pointer is read from both edges at once")
+        try expect(track.nearestEdge(to: CGPoint(x: 970, y: 850), current: .top) == .top && track.nearestEdge(to: CGPoint(x: 990, y: 500), current: .top) == .right, "Switching edges takes a clear margin")
+        let landing = RailLanding(track: track, railLength: 400, horizontalPanelWidth: 420)
+        try expect(landing.savedPosition(along: 400, on: .right) == 0.5 && landing.savedPosition(along: 212, on: .right) == 1 && landing.savedPosition(along: 0, on: .top) == 0, "Saved positions run bottom to top and left to right, clamped")
+        for edge in [EdgeSide.top, .right, .bottom, .left] {
+            try expect(abs(landing.savedPosition(along: landing.position(saved: 0.3, on: edge) - track.start(of: edge), on: edge) - 0.3) < 1e-9, "Saved position round-trips on \(edge)")
+        }
+        let renamed = ProviderID(rawValue: "claude-nickname-fixture")!
+        ProviderNicknames.set("  Work  ", for: renamed)
+        try expect(renamed.displayName == "Work" && renamed.defaultName == "Claude (nickname-fixture)", "A nickname is trimmed and names the account everywhere")
+        ProviderNicknames.set(renamed.defaultName, for: renamed)
+        try expect(ProviderNicknames.name(for: renamed) == nil && renamed.displayName == "Claude (nickname-fixture)", "Renaming back to its own name clears the nickname")
+        let settled = landing.landing(for: 1010)
+        try expect(settled.edge == .right && settled.saved == 1, "Let go just round a corner, the rail slides fully onto that edge")
     }
 
     // MARK: - Kimi

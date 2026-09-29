@@ -46,6 +46,21 @@ final class UpdateManager: ObservableObject {
     /// bar instead of an alert nobody sees; choosing Check for Updates shows it immediately.
     @Published private(set) var pendingUpdateVersion: String?
 
+    /// The version the rail's update card was put off for with Later. It is not offered on
+    /// the rail again; the red dot on the settings button keeps it in reach.
+    @Published private(set) var deferredVersion: String? = UserDefaults.standard.string(forKey: "updateDeferredVersion")
+
+    /// A pending update the rail should offer, not yet put off.
+    var updateToOffer: String? {
+        guard let version = pendingUpdateVersion, version != deferredVersion else { return nil }
+        return version
+    }
+
+    func deferPendingUpdate() {
+        deferredVersion = pendingUpdateVersion
+        UserDefaults.standard.set(deferredVersion, forKey: "updateDeferredVersion")
+    }
+
     /// Without a menu bar item there is nowhere quiet to announce an update, so Sparkle's own
     /// alert is allowed through instead.
     var hasMenuBarPresence = true {
@@ -72,6 +87,10 @@ final class UpdateManager: ObservableObject {
         }
         if ProcessInfo.processInfo.environment["GAUGEZ_PREVIEW_DATA"] != "1" {
             controller.startUpdater()
+        }
+        // Debug aid: GAUGEZ_DEBUG_UPDATE=<version> pretends a scheduled check found one.
+        if let version = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_UPDATE"] {
+            pendingUpdateVersion = version
         }
     }
 

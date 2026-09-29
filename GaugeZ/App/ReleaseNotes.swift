@@ -24,6 +24,22 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.15",
+            headline: "Carry the rail round the corners.",
+            changes: [
+                .init("Drag it anywhere",
+                      "Hold the handle and the rail follows along any edge and flows round the corners, then settles where you let go."),
+                .init("A notch that comes alive",
+                      "On a MacBook, small rings sit beside the camera, and the rail drips out of the notch like a drop of glass."),
+                .init("Updates ask on the rail",
+                      "A new version shows up with Update and Later. Put it off and a red dot keeps it in reach."),
+                .init("Readings in the menu bar",
+                      "Pick accounts and the menu bar shows what's left and when it resets."),
+                .init("Small things",
+                      "Rename any account, a shorter settings card, and an optional color ramp for the rings.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.14",
             headline: "Know if you're burning too fast.",
             changes: [

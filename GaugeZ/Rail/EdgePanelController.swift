@@ -12,6 +12,7 @@ final class EdgePanelController {
     private var peekTask: Task<Void, Never>?
     private var peekEvent: SessionCompletionWatcher.Event?
     private let store: UsageStore
+    private let updates: UpdateManager
     private let panel: EdgePanel
     private let state = EdgePanelState()
     private var cancellables = Set<AnyCancellable>()
@@ -36,12 +37,14 @@ final class EdgePanelController {
     /// The usable area the rail was last placed against; see `followUsableAreaIfItMoved`.
     private var lastUsableArea: NSRect = .zero
     private var usableAreaTimer: Timer?
-    private var dragStartScreenY: CGFloat = 0
-    private var dragStartVerticalPosition: Double = 0.5
-    private var lastSnapHaptic = false
-    /// The other edge a drag is currently reaching for; see `EdgeDropZone`.
-    private var dropTarget: EdgeSide?
-    private let dropOverlay = EdgeDropZoneOverlay()
+    /// The rail in the hand; see `Carry`.
+    private var carry: Carry?
+    private lazy var passage = RailPassageOverlay(store: store)
+    private var ticker: DisplayTicker?
+    /// Where the carried rail sits on the edge it started from, in place of the saved position
+    /// until it is let go — the saved one is written once, on landing.
+    private var livePosition: Double?
+    private var dragMonitor: Any?
     /// The rail is ordered out because a full-screen app owns this display.
     private var isFoldedForFullScreen = false
     private var fullScreenTick = 0
@@ -62,9 +65,10 @@ final class EdgePanelController {
     private var snapshotCounter = 0
     private var snapshotTask: Task<Void, Never>?
 
-    init(store: UsageStore, displayID: String? = nil) {
+    init(store: UsageStore, updates: UpdateManager, displayID: String? = nil) {
         self.displayID = displayID
         self.store = store
+        self.updates = updates
         panel = EdgePanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -235,8 +239,13 @@ final class EdgePanelController {
             var rects = [rail]
             if top, let notch = state.joinedNotch {
                 // The hardware notch is the tab while the rail rests; hovering it opens the rail.
-                rects.append(NSRect(x: frame.midX - notch.width / 2, y: frame.maxY - notch.height,
-                                    width: notch.width, height: notch.height))
+                // With rings beside it, the band they sit in is part of the tab.
+                let perSide = store.notchRingsEnabled && !state.isExpanded
+                    ? NotchEarsMetrics.perSide(count: store.railProviders.count, notch: notch, available: frame.width)
+                    : 0
+                let width = NotchEarsMetrics.width(perSide: perSide, notch: notch)
+                rects.append(NSRect(x: frame.midX - width / 2, y: frame.maxY - notch.height,
+                                    width: width, height: notch.height))
             }
             if state.isExpanded, state.attachment != nil {
                 let width = RailMetrics.attachmentWidth - RailMetrics.pointerDepth
@@ -318,7 +327,8 @@ final class EdgePanelController {
         for monitor in pointerMonitors { NSEvent.removeMonitor(monitor) }
         pointerMonitors.removeAll()
         usableAreaTimer?.invalidate()
-        dropOverlay.hide()
+        endCarry()
+        passage.hide()
         panel.close()
     }
 
@@ -356,6 +366,36 @@ final class EdgePanelController {
         }
         setExpanded(true)
         setAttachment(.detail(event.provider))
+    }
+
+    /// A new version found in the background is offered on the rail once, open until it is
+    /// answered. Settings the user opened are not pushed aside for it; it waits for the next
+    /// time the rail is free.
+    private func offerUpdateIfDue() {
+        guard updates.updateToOffer != nil else {
+            if state.attachment == .update { setAttachment(nil) }
+            return
+        }
+        guard !isDragging, store.displayMode != .hidden, !isFoldedForFullScreen,
+              state.attachment != .settings, !usageEventHoldOpen, peekEvent == nil else { return }
+        // On every display at once would be one question asked several times.
+        if displayID != nil, displayID != NSScreen.main.map(DisplayChoice.identifier(for:)) { return }
+        collapseTask?.cancel()
+        attachmentTask?.cancel()
+        setExpanded(true)
+        isAttachmentPinned = true
+        setAttachment(.update)
+    }
+
+    private func updateChosen(_ install: Bool) {
+        if install {
+            updates.checkForUpdates()
+        } else {
+            updates.deferPendingUpdate()
+        }
+        isAttachmentPinned = false
+        setAttachment(nil)
+        if store.displayMode == .hover, !pointerIsOverVisibleContent { setExpanded(false) }
     }
 
     private func peek(_ event: SessionCompletionWatcher.Event) {
@@ -427,9 +467,12 @@ final class EdgePanelController {
             railResizeChanged: { [weak self] resizing in
                 self?.isResizingRail = resizing
                 if !resizing { self?.routePointer() }
-            }
+            },
+            updateChosen: { [weak self] install in self?.updateChosen(install) }
         )
-        let root = EdgePanelContentView(state: state, actions: actions).environmentObject(store)
+        let root = EdgePanelContentView(state: state, actions: actions)
+            .environmentObject(store)
+            .environmentObject(updates)
         let view = NSHostingView(rootView: AnyView(root))
         // The content is a constant-width container wider than the collapsed window; the window
         // must keep the frame the controller sets and clip, not grow to fit the content.
@@ -443,6 +486,11 @@ final class EdgePanelController {
     /// window on the old edge after the side is switched.
     private func observeSettings() {
         store.sessionCompletions.sink { [weak self] event in self?.peek(event) }.store(in: &cancellables)
+        updates.$pendingUpdateVersion
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.offerUpdateIfDue() }
+            .store(in: &cancellables)
         store.$usageEventPeek
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in self?.usageEventPeekChanged(event) }
@@ -524,6 +572,8 @@ final class EdgePanelController {
             }
             .store(in: &cancellables)
 
+        store.$notchRingsEnabled.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.routePointer() }.store(in: &cancellables)
         store.$hideOverFullScreen.dropFirst().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateFullScreenFold() }.store(in: &cancellables)
         let workspace = NSWorkspace.shared.notificationCenter
@@ -595,7 +645,7 @@ final class EdgePanelController {
     }
 
     private func scheduleCollapse() {
-        guard !isDragging, peekEvent == nil, !usageEventHoldOpen else { return }
+        guard !isDragging, peekEvent == nil, !usageEventHoldOpen, state.attachment != .update else { return }
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled, let self, !self.isPointerInRail, !self.isPointerInAttachment, !self.isDragging else { return }
@@ -627,7 +677,7 @@ final class EdgePanelController {
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isDragging else { return }
             self.state.hoveredProvider = provider
-            guard self.state.attachment != .settings else { return }
+            guard self.state.attachment != .settings, self.state.attachment != .update else { return }
 
             if let provider {
                 if self.isAttachmentPinned, case .detail = self.state.attachment { return }
@@ -715,7 +765,9 @@ final class EdgePanelController {
         }
         if expanded { store.expandedPanels.insert(expansionID) } else { store.expandedPanels.remove(expansionID) }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        withAnimation(animated && !reduceMotion ? .spring(duration: 0.2, bounce: 0.1) : .easeOut(duration: animated ? 0.1 : 0)) {
+        // Joined to the Mac's notch the rail pours out from under it, on the notch's own spring.
+        let spring: Animation = state.joinedNotch != nil ? NotchMotion.drip(opening: expanded) : .spring(duration: 0.2, bounce: 0.1)
+        withAnimation(animated && !reduceMotion ? spring : .easeOut(duration: animated ? 0.1 : 0)) {
             state.isExpanded = expanded
         }
         positionPanel(animated: animated)
@@ -765,6 +817,7 @@ final class EdgePanelController {
         switch state.attachment {
         case .detail(let provider): label = "card-\(provider.rawValue)"
         case .settings: label = "settings"
+        case .update: label = "update"
         case nil: label = state.isExpanded ? "expanded" : "collapsed"
         }
         let name = String(format: "%02d-%@%@.png", snapshotCounter, label, suffix)
@@ -781,82 +834,275 @@ final class EdgePanelController {
         return (minY, maxY, maxY - minY)
     }
 
+    // MARK: - Carrying the rail round the border
+
+    /// **The rail in the hand.** Its place is a position on the usable area's border — see
+    /// `BorderTrack` — following the pointer's place on it at the distance it was picked up
+    /// at, on a spring. Fully on the edge it started from it is the rail itself, sliding;
+    /// reaching round a corner, or on any other edge, it is drawn on the passage surface
+    /// instead, and the rail's own window waits out of sight until it is let go.
+    private struct Carry {
+        let track: BorderTrack
+        let landing: RailLanding
+        let startEdge: EdgeSide
+        /// The outline drawn in the passage: the notch, without its settings button.
+        let bodyLength: CGFloat
+        let depth: CGFloat
+        let scale: CGFloat
+        /// Where the notch body's middle is along the border from the rail's middle: the
+        /// settings button hangs off one end, so the body sits towards the other.
+        let bodyOffset: CGFloat
+        /// What the rail carries — each ring and the settings button — as distances along
+        /// the border from its middle, in the order the rail lays them out where it started.
+        let contents: [(provider: ProviderID?, offset: CGFloat)]
+        var grip: CGFloat
+        var reading: BorderTrack.Reading
+        var pointerEdge: EdgeSide
+        var target: CGFloat
+        var shown: CGFloat
+        var velocity: CGFloat = 0
+        var snapped: Bool
+        /// Set when it is let go: where it settles.
+        var land: (edge: EdgeSide, saved: Double)?
+        var inPassage = false
+        /// Where the passage was last drawn, so a rail held still is not redrawn every frame.
+        var drawnAt: CGFloat?
+    }
+
+    private func railLanding(on screen: NSScreen) -> RailLanding {
+        let scale = CGFloat(store.railScale)
+        let count = store.railProviders.count
+        return RailLanding(track: BorderTrack(frame: screen.visibleFrame),
+                           railLength: RailMetrics.shapeHeight(providerCount: count, scale: scale),
+                           horizontalPanelWidth: HorizontalRailMetrics.width(providerCount: count, scale: scale))
+    }
+
     private func dragStarted() {
         debugNote("drag started")
+        // Picked up again while still settling from the last drop: that drop lands at once.
+        if var landing = carry, landing.land != nil {
+            landing.target = landing.shown
+            carry = landing
+            finishLanding()
+        }
+        guard carry == nil, let screen = preferredScreen else { return }
         isDragging = true
-        dragStartScreenY = store.edgeSide.isHorizontal ? NSEvent.mouseLocation.x : NSEvent.mouseLocation.y
-        dragStartVerticalPosition = store.verticalPosition
-        lastSnapHaptic = abs(store.verticalPosition - 0.5) < 0.02
         collapseTask?.cancel()
         attachmentTask?.cancel()
         setAttachment(nil, animated: false)
         panel.ignoresMouseEvents = false
+
+        let landing = railLanding(on: screen)
+        let track = landing.track
+        let scale = CGFloat(store.railScale)
+        let middle = landing.position(saved: store.verticalPosition, on: store.edgeSide)
+        let pointer = NSEvent.mouseLocation
+        let edge = track.nearestEdge(to: pointer, current: store.edgeSide)
+        let reading = track.reading(of: pointer, nearest: edge)
+        // Measured from the rail's head (the drag handle) along it, as the side rail lays
+        // itself out; the head points anticlockwise on the right and top edges and clockwise
+        // on the left and bottom, which is how the horizontal rails are turned.
+        let providers = store.railProviders
+        let shapeHeight = RailMetrics.shapeHeight(providerCount: providers.count, scale: scale)
+        let notchHeight = RailMetrics.notchHeight(providerCount: providers.count, scale: scale)
+        let footward: CGFloat = store.edgeSide == .right || store.edgeSide == .top ? 1 : -1
+        let fromHead = { (distance: CGFloat) in footward * (distance - shapeHeight / 2) }
+        let rowHeight = RailMetrics.rowHeight(scale: scale)
+        let ringSize = RailMetrics.ringSize(scale: scale)
+        var contents: [(provider: ProviderID?, offset: CGFloat)] = providers.enumerated().map { index, provider in
+            (provider, fromHead(RailMetrics.rowCenterY(index: index, scale: scale) - ringSize / 2 + rowHeight / 2))
+        }
+        contents.append((nil, fromHead(notchHeight - (11 * scale).rounded())))
+        carry = Carry(track: track, landing: landing, startEdge: store.edgeSide,
+                      bodyLength: notchHeight,
+                      depth: RailMetrics.expandedWidth(scale: scale), scale: scale,
+                      bodyOffset: fromHead(notchHeight / 2), contents: contents,
+                      grip: track.delta(from: track.place(of: pointer, by: reading), to: middle),
+                      reading: reading, pointerEdge: edge, target: middle, shown: middle,
+                      snapped: abs(store.verticalPosition - 0.5) < 0.001)
+        // Picked up out of a landing that had not handed back yet, the rail is still hidden.
+        carry?.inPassage = panel.alphaValue < 0.5
+        passage.place(over: track.frame)
+        // The grip reports the drag, but it lives in the rail's window, which is out of sight
+        // while the rail is in the passage. The app's own event stream is watched as well, so
+        // letting go always lands it.
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            if event.type == .leftMouseUp { self?.dragEnded() } else { self?.dragMoved(screenY: 0) }
+            return event
+        }
+        if let host = panel.contentView {
+            ticker = DisplayTicker(view: host) { [weak self] dt in self?.follow(dt: dt) }
+        }
     }
 
     private func dragMoved(screenY: CGFloat) {
-        guard isDragging, let screen = preferredScreen else { return }
-        let scale = CGFloat(store.railScale)
-        let height = RailMetrics.panelHeight(providerCount: store.railProviders.count, scale: scale)
-        let bounds: (minY: CGFloat, maxY: CGFloat, range: CGFloat)
-        if store.edgeSide.isHorizontal {
-            let range = max(0, screen.visibleFrame.width - HorizontalRailMetrics.width(providerCount: store.railProviders.count, scale: scale))
-            bounds = (screen.visibleFrame.minX, screen.visibleFrame.minX + range, range)
-        } else { bounds = verticalBounds(screen: screen, height: height) }
-        guard bounds.range > 0 else { return }
-
-        let position = store.edgeSide.isHorizontal ? NSEvent.mouseLocation.x : screenY
-        let deltaY = position - dragStartScreenY
-        let startY = bounds.minY + bounds.range * CGFloat(dragStartVerticalPosition)
-        let newY = startY + deltaY
-        var newRatio = Double((newY - bounds.minY) / bounds.range)
-
-        // Snap to center (0.5) if within snap threshold
-        let snapThreshold = 0.025
-        let inSnapZone = abs(newRatio - 0.5) < snapThreshold
-        if inSnapZone {
-            newRatio = 0.5
-            if !lastSnapHaptic {
-                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-                lastSnapHaptic = true
-            }
-        } else {
-            lastSnapHaptic = false
+        guard var carry, carry.land == nil else { return }
+        let track = carry.track
+        let pointer = NSEvent.mouseLocation
+        let edge = track.nearestEdge(to: pointer, current: carry.pointerEdge)
+        let reading = track.reading(of: pointer, nearest: edge)
+        if reading != carry.reading {
+            // Read another way, the pointer is somewhere slightly different on the border;
+            // the grip takes up the difference so the rail does not jump.
+            carry.grip += track.delta(from: track.place(of: pointer, by: reading),
+                                      to: track.place(of: pointer, by: carry.reading))
+            carry.reading = reading
         }
-
-        let clamped = max(0.0, min(1.0, newRatio))
-        store.verticalPosition = clamped
-        positionPanel(animated: false)
-        updateDropTarget(on: screen)
-    }
-
-    private func updateDropTarget(on screen: NSScreen) {
-        let target = EdgeDropZone.target(pointer: NSEvent.mouseLocation, in: screen.visibleFrame, current: store.edgeSide)
-        guard target != dropTarget else { return }
-        dropTarget = target
-        if let target {
-            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-            dropOverlay.show(target, on: screen, tint: NSColor(Color(hex: store.indicatorColorHex) ?? .accentColor))
-        } else {
-            dropOverlay.hide()
+        carry.pointerEdge = edge
+        var target = track.wrapped(track.place(of: pointer, by: reading) + carry.grip)
+        // The middle of an edge holds the rail a moment, with a tap. On top of a MacBook that
+        // is where it joins the notch.
+        let (onEdge, along) = track.place(at: target)
+        let range = carry.landing.range(on: onEdge)
+        let centre = track.length(of: onEdge) / 2
+        let inSnap = range.contains(along)
+            && abs(along - centre) < max(6, (range.upperBound - range.lowerBound) * 0.025)
+        if inSnap {
+            target = track.start(of: onEdge) + centre
+            if !carry.snapped { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default) }
         }
+        carry.snapped = inSnap
+        carry.target = target
+        self.carry = carry
     }
 
     private func dragEnded() {
-        debugNote("drag ended at \(store.verticalPosition)")
-        isDragging = false
-        dropOverlay.hide()
-        if let target = dropTarget {
-            dropTarget = nil
-            // Land where the pointer let go, measured along the new edge.
-            if let frame = preferredScreen?.visibleFrame {
-                let pointer = NSEvent.mouseLocation
-                let ratio = target.isHorizontal ? (pointer.x - frame.minX) / max(1, frame.width) : (pointer.y - frame.minY) / max(1, frame.height)
-                store.verticalPosition = Double(ratio)
+        guard var carry, carry.land == nil else { return }
+        let landing = carry.landing.landing(for: carry.target)
+        debugNote("drag let go: lands on \(landing.edge) at \(landing.saved)")
+        carry.land = (landing.edge, landing.saved)
+        carry.target = landing.position
+        self.carry = carry
+        if let dragMonitor {
+            NSEvent.removeMonitor(dragMonitor)
+            self.dragMonitor = nil
+        }
+    }
+
+    /// **The rail follows the hand on a spring**: it carries its speed, catches up, and comes
+    /// to rest with the smallest give, instead of being pushed point for point. Let go, it
+    /// settles on a softer one.
+    private func follow(dt: CFTimeInterval) {
+        guard var carry else { stopTicker(); return }
+        let track = carry.track
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            carry.shown = carry.target
+            carry.velocity = 0
+        } else {
+            let offset = track.delta(from: carry.target, to: carry.shown)
+            let omega: CGFloat = carry.land == nil ? 42 : 26
+            let damping: CGFloat = 0.86
+            let step = CGFloat(dt)
+            carry.velocity += (-omega * omega * offset - 2 * damping * omega * carry.velocity) * step
+            carry.shown = track.wrapped(carry.shown + carry.velocity * step)
+        }
+        let settled = abs(track.delta(from: carry.target, to: carry.shown)) < 0.4 && abs(carry.velocity) < 8
+        if settled {
+            carry.shown = carry.target
+            carry.velocity = 0
+        }
+        show(&carry)
+        self.carry = carry
+        if settled, carry.land != nil { finishLanding() }
+    }
+
+    /// Puts the carried rail where the spring has it: the rail itself on its own edge, the
+    /// passage anywhere else.
+    private func show(_ carry: inout Carry) {
+        let track = carry.track
+        let (edge, along) = track.place(at: carry.shown)
+        let range = carry.landing.range(on: edge)
+        // Out to the passage as soon as it leaves the range it can rest in; back to the rail
+        // only once clearly inside it again. Handed across at one exact point, the smallest
+        // movement there swapped the two back and forth, and each swap cut the last one short.
+        let margin: CGFloat = carry.inPassage ? 24 : 0
+        let onOwnEdge = edge == carry.startEdge
+            && along >= range.lowerBound + margin && along <= range.upperBound - margin
+        if onOwnEdge {
+            livePosition = carry.landing.savedPosition(along: along, on: edge)
+            positionPanel(animated: false)
+        } else if !carry.inPassage || carry.drawnAt.map({ abs($0 - carry.shown) >= 0.25 }) ?? true {
+            carry.drawnAt = carry.shown
+            let items = carry.contents.flatMap { item in
+                placements(track, of: item.provider, at: carry.shown + item.offset, depth: carry.depth)
             }
-            store.edgeSide = target
-            return
+            passage.draw(RailPassageShape.path(track: track, middle: carry.shown + carry.bodyOffset,
+                                               length: carry.bodyLength, depth: carry.depth, scale: carry.scale),
+                         items: items, scale: carry.scale)
+        }
+        if onOwnEdge == carry.inPassage {
+            carry.inPassage = !onOwnEdge
+            // A straight swap: the outline is drawn exactly where the rail is, so there is
+            // nothing to fade between, and a fade left both half there — the rail's rings
+            // blurred through the glass.
+            crossFade(toPassage: carry.inPassage, duration: 0)
+        }
+    }
+
+    /// **Where something the rail carries is drawn**, at a border position: in the middle of
+    /// the band, on its own edge's line, turning onto the next edge's line where the two
+    /// bands' middles meet. Whole, as Codenotch draws them: round the bend they bunch up and
+    /// briefly overlap, which reads as the rail being bent; cut at the corner's diagonal they
+    /// read as being sliced.
+    private func placements(_ track: BorderTrack, of provider: ProviderID?, at position: CGFloat, depth: CGFloat) -> [PassageItem] {
+        let half = depth / 2
+        let (edge, along) = track.place(at: position)
+        let a = min(max(along, half), max(half, track.length(of: edge) - half))
+        let centre: CGPoint
+        switch edge {
+        case .top: centre = CGPoint(x: a, y: half)
+        case .right: centre = CGPoint(x: track.width - half, y: a)
+        case .bottom: centre = CGPoint(x: track.width - a, y: track.height - half)
+        case .left: centre = CGPoint(x: half, y: track.height - a)
+        }
+        return [PassageItem(provider: provider, centre: centre, cut: nil)]
+    }
+
+    private func crossFade(toPassage: Bool, duration: TimeInterval? = nil) {
+        let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (duration ?? 0.12)
+        passage.fade(in: toPassage, duration: duration)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            panel.animator().alphaValue = toPassage ? 0 : 1
+        }
+    }
+
+    private func finishLanding() {
+        guard let carry, let land = carry.land else { return }
+        endCarry()
+        store.verticalPosition = land.saved
+        if store.edgeSide != land.edge { store.edgeSide = land.edge }
+        positionPanel(animated: false)
+        if carry.inPassage {
+            // The rail's window lays itself out for the new edge on the next pass; the passage
+            // holds the shape until then.
+            panel.alphaValue = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                // Unless it has been picked up again meanwhile.
+                guard let self, self.carry == nil else { return }
+                self.crossFade(toPassage: false)
+            }
         }
         routePointer()
+    }
+
+    /// Drops whatever is in the hand, without landing it.
+    private func endCarry() {
+        ticker?.stop()
+        ticker = nil
+        if let dragMonitor {
+            NSEvent.removeMonitor(dragMonitor)
+            self.dragMonitor = nil
+        }
+        carry = nil
+        livePosition = nil
+        isDragging = false
+        panel.alphaValue = 1
+    }
+
+    private func stopTicker() {
+        ticker?.stop()
+        ticker = nil
     }
 
     /// The window is always its maximum size and never resizes; transparent areas pass pointer
@@ -866,6 +1112,7 @@ final class EdgePanelController {
         guard let screen = preferredScreen else { return }
         let visibleFrame = screen.visibleFrame
         lastUsableArea = visibleFrame
+        let position = livePosition ?? store.verticalPosition
         let frame: NSRect
         let scale = CGFloat(store.railScale)
         if store.edgeSide.isHorizontal {
@@ -873,13 +1120,15 @@ final class EdgePanelController {
             // to the screen's real top so the notch is inside it (as the hover target), the
             // content is inset below the menu bar band, and the rail is centered under the
             // notch rather than at the user's chosen position.
-            let notch = store.edgeSide == .top ? screen.hardwareNotch : nil
+            // Only in the middle: carried along the top edge the rail slides freely under the
+            // menu bar, and snaps into the notch as it passes the centre.
+            let notch = store.edgeSide == .top && abs(position - 0.5) < 0.001 ? screen.hardwareNotch : nil
             let inset: CGFloat = notch.map { max($0.height, screen.frame.maxY - visibleFrame.maxY) } ?? 0
             let width = min(HorizontalRailMetrics.width(providerCount: store.railProviders.count, scale: scale), visibleFrame.width)
             let height = min(620, visibleFrame.height) + inset
             let x = notch != nil
                 ? (screen.frame.midX - width / 2).rounded()
-                : visibleFrame.minX + max(0, visibleFrame.width - width) * CGFloat(store.verticalPosition)
+                : visibleFrame.minX + max(0, visibleFrame.width - width) * CGFloat(position)
             let top = notch != nil ? screen.frame.maxY : visibleFrame.maxY
             let y = store.edgeSide == .top ? top - height : visibleFrame.minY
             frame = NSRect(x: x, y: y, width: width, height: height)
@@ -892,7 +1141,7 @@ final class EdgePanelController {
             let height = RailMetrics.panelHeight(providerCount: store.railProviders.count, scale: scale)
             let x = store.edgeSide == .right ? visibleFrame.maxX - width : visibleFrame.minX
             let bounds = verticalBounds(screen: screen, height: height)
-            let y = bounds.minY + bounds.range * CGFloat(store.verticalPosition)
+            let y = bounds.minY + bounds.range * CGFloat(position)
             frame = NSRect(x: x, y: y, width: width, height: height)
         }
         if panel.frame != frame {

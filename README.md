@@ -29,7 +29,9 @@ Every AI tool keeps its usage meter somewhere different. GaugeZ collects them in
 rail on the edge of your screen. Hover to expand it, read the rings, get back to work.
 
 - **Edge rail, not a window.** A slim tab on any edge of any display. It expands on hover,
-  never steals focus, and follows you across Spaces. On a MacBook it joins the hardware notch.
+  never steals focus, and follows you across Spaces. Drag its handle and it follows you
+  along any edge and flows round the corners. On a MacBook it joins the hardware notch, with
+  small rings either side of the camera while it rests.
 - **Remaining, never used.** Each ring shows what is left in the most constrained window.
   The detail card lists every window with its reset time, and whether you are spending
   faster or slower than the window is passing. Claude can lead with a daily budget: a
@@ -45,9 +47,12 @@ rail on the edge of your screen. Hover to expand it, read the rings, get back to
   session finishes or needs input, and clicking it lands on the session's own terminal tab
   in Terminal.app, iTerm2, Ghostty, and cmux.
 - **Multiple Claude Code accounts.** Each `~/.claude-*` profile gets its own ring.
-- **Make it yours.** Reorder providers, resize the notch, pick an edge and display or drag
-  the rail to another edge, hide it over full-screen apps, choose glass or solid, and decide whether GaugeZ shows in the Dock, the menu bar, or neither.
-- **Automatic updates.** Signed with EdDSA and delivered through Sparkle.
+- **Make it yours.** Reorder and rename accounts, resize the notch, pick an edge and display
+  or carry the rail to another edge, hide it over full-screen apps, choose glass or solid and
+  stepped or ramped ring colors, show chosen readings in the menu bar, and decide whether
+  GaugeZ shows in the Dock, the menu bar, or neither.
+- **Automatic updates.** Signed with EdDSA and delivered through Sparkle. A new version is
+  offered on the rail with Update and Later.
 - **In your language.** English and 21 other languages, switchable in
   **Settings → General** without a restart.
 

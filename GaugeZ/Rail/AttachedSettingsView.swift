@@ -6,13 +6,22 @@ import SwiftUI
 struct AttachedSettingsView: View {
     @EnvironmentObject private var store: UsageStore
     let actions: EdgePanelActions
+    /// The providers that were on when the card opened. Only providers in use are listed, so
+    /// the card stays short, but one switched off here stays until the card closes, so a slip
+    /// can be undone where it was made. The rest are switched on in the Settings window.
+    @State private var listed: Set<ProviderID>?
+
+    private var shownProviders: [ProviderID] {
+        let keep = listed ?? store.enabledProviders
+        return store.providerOrder.filter { keep.contains($0) || store.enabledProviders.contains($0) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             GaugeZWordmark(size: 17)
 
             VStack(spacing: 7) {
-                ForEach(store.providerOrder) { provider in
+                ForEach(shownProviders) { provider in
                     HStack(spacing: 10) {
                         ProviderLogo(provider: provider, size: 14)
                             .frame(width: 18)
@@ -30,7 +39,25 @@ struct AttachedSettingsView: View {
                         .toggleStyle(RailToggleStyle(glass: store.glassEnabled))
                     }
                 }
+
+                if shownProviders.count < store.providerOrder.count {
+                    Button {
+                        NotificationCenter.default.post(name: .gaugezOpenSettings, object: nil)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle")
+                            Text("More providers in Settings…")
+                            Spacer()
+                        }
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
             }
+            .onAppear { if listed == nil { listed = store.enabledProviders } }
 
             settingRow("Show") {
                 GlassSegmentedPicker(selection: $store.displayMode, options: DisplayMode.allCases,

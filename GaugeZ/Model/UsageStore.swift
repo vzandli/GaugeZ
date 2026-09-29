@@ -143,6 +143,31 @@ final class UsageStore: ObservableObject {
     @Published var hideOverFullScreen = UserDefaults.standard.object(forKey: "hideOverFullScreen") as? Bool ?? true {
         didSet { UserDefaults.standard.set(hideOverFullScreen, forKey: "hideOverFullScreen") }
     }
+
+    /// Accounts whose readings the menu bar item shows, in rail order; empty shows the icon.
+    @Published var menuBarProviderIDs = UserDefaults.standard.stringArray(forKey: "menuBarProviders") ?? [] {
+        didSet { UserDefaults.standard.set(menuBarProviderIDs, forKey: "menuBarProviders") }
+    }
+
+    var menuBarProviders: [ProviderID] {
+        visibleProviders.filter { menuBarProviderIDs.contains($0.rawValue) }
+    }
+
+    func setMenuBarReading(_ provider: ProviderID, shown: Bool) {
+        var ids = menuBarProviderIDs.filter { $0 != provider.rawValue }
+        if shown { ids.append(provider.rawValue) }
+        menuBarProviderIDs = ids
+    }
+
+    /// Rings shift colour continuously from empty to full instead of stepping.
+    @Published var colorRampEnabled = UserDefaults.standard.object(forKey: "colorRampEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(colorRampEnabled, forKey: "colorRampEnabled") }
+    }
+
+    /// On a MacBook's top edge, the resting rail shows small rings either side of the notch.
+    @Published var notchRingsEnabled = UserDefaults.standard.object(forKey: "notchRingsEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(notchRingsEnabled, forKey: "notchRingsEnabled") }
+    }
     /// Percent remaining at which the warning and critical notifications fire.
     @Published var warnThreshold = UserDefaults.standard.object(forKey: "warnThreshold") as? Double ?? ThresholdNotifier.defaultWarnRemaining {
         didSet {
@@ -381,6 +406,7 @@ final class UsageStore: ObservableObject {
             }
             UserDefaults.standard.removePersistentDomain(forName: bundleID)
         }
+        ProviderNicknames.removeAll()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         NSApp.terminate(nil)
@@ -389,6 +415,12 @@ final class UsageStore: ObservableObject {
     func updateSystemSettings() {
         availableDisplays = DisplayChoice.current()
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    /// Names an account everywhere GaugeZ shows it; nil or blank goes back to its own name.
+    func rename(_ provider: ProviderID, to name: String?) {
+        objectWillChange.send()
+        ProviderNicknames.set(name, for: provider)
     }
 
     func moveProvider(_ provider: ProviderID, by offset: Int) {
@@ -623,6 +655,16 @@ final class UsageStore: ObservableObject {
         }
         if let forced = ProcessInfo.processInfo.environment["GAUGEZ_DEBUG_EDGE"], let side = EdgeSide(rawValue: forced) {
             edgeSide = side   // debug aid; not persisted because observers do not fire in init
+        }
+        // Until 1.0.15 a MacBook's top edge ignored the saved position and always joined the
+        // notch. The rail now slides along the top and joins the notch only in the middle, so
+        // a rail that was already there is kept there once.
+        if !UserDefaults.standard.bool(forKey: "notchPlacementMigrated") {
+            UserDefaults.standard.set(true, forKey: "notchPlacementMigrated")
+            if edgeSide == .top, NSScreen.screens.contains(where: { $0.hardwareNotch != nil }) {
+                verticalPosition = 0.5
+                UserDefaults.standard.set(0.5, forKey: Keys.verticalPosition)
+            }
         }
 
         if isPreview {

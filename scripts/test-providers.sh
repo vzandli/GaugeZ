@@ -7,7 +7,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$build_dir/module-cache" \
   GaugeZ/Model/UsageModels.swift GaugeZ/Model/ProviderRetryPolicy.swift GaugeZ/Model/ThresholdNotifier.swift \
   GaugeZ/Model/UsageEventWatcher.swift GaugeZ/Model/UsagePace.swift \
   GaugeZ/Credentials/OwnedAPIKey.swift GaugeZ/Sessions/CodexRollout.swift \
-  GaugeZ/Rail/FullScreenDetector.swift GaugeZ/Rail/EdgeDropZone.swift \
+  GaugeZ/Rail/FullScreenDetector.swift GaugeZ/Rail/BorderTrack.swift \
   GaugeZ/Providers/KimiUsageProvider.swift GaugeZ/Providers/CommandCodeUsageProvider.swift \
   GaugeZ/Providers/OllamaUsageProvider.swift GaugeZ/Providers/DevinUsageProvider.swift \
   GaugeZ/Providers/KiroUsageProvider.swift GaugeZ/Providers/MiniMaxUsageProvider.swift \

@@ -32,7 +32,7 @@ struct ProviderMeterView: View {
                         Circle()
                             .trim(from: 0, to: revealed ? CGFloat(remaining) / 100 : 0)
                             .stroke(
-                                Color.quota(remainingPercent: remaining),
+                                store.quotaColor(remainingPercent: remaining),
                                 style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                             )
                             .rotationEffect(.degrees(-90))
@@ -144,6 +144,32 @@ extension Color {
         case 15..<35: Color(red: 1, green: 0.62, blue: 0.04)
         default: Color(red: 0.19, green: 0.82, blue: 0.35)
         }
+    }
+
+    /// The same three colours as one continuous ramp: red when empty, amber a quarter of the
+    /// way, green from well over half. A ring shifts a little with every point instead of
+    /// stepping at the thresholds.
+    static func quotaRamp(remainingPercent: Double) -> Color {
+        let stops: [(at: Double, rgb: (Double, Double, Double))] = [
+            (0, (1, 0.27, 0.23)), (25, (1, 0.62, 0.04)), (60, (0.19, 0.82, 0.35))
+        ]
+        let value = max(0, min(100, remainingPercent.isFinite ? remainingPercent : 0))
+        guard let upper = stops.firstIndex(where: { $0.at >= value }), upper > 0 else {
+            let rgb = value <= 0 ? stops[0].rgb : stops[stops.count - 1].rgb
+            return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
+        }
+        let a = stops[upper - 1], b = stops[upper]
+        let t = (value - a.at) / (b.at - a.at)
+        return Color(red: a.rgb.0 + (b.rgb.0 - a.rgb.0) * t,
+                     green: a.rgb.1 + (b.rgb.1 - a.rgb.1) * t,
+                     blue: a.rgb.2 + (b.rgb.2 - a.rgb.2) * t)
+    }
+}
+
+extension UsageStore {
+    /// The ring colour for a remaining share, stepped or ramped as Appearance chooses.
+    func quotaColor(remainingPercent: Double) -> Color {
+        colorRampEnabled ? .quotaRamp(remainingPercent: remainingPercent) : .quota(remainingPercent: remainingPercent)
     }
 }
 

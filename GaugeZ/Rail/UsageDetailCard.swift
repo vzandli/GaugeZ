@@ -329,6 +329,7 @@ struct UsageDetailCard: View {
 }
 
 private struct UsageBar: View {
+    @EnvironmentObject private var store: UsageStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let remainingPercent: Double
 
@@ -345,7 +346,7 @@ private struct UsageBar: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: remainingPercent)
     }
 
-    private var color: Color { .quota(remainingPercent: remainingPercent) }
+    private var color: Color { store.quotaColor(remainingPercent: remainingPercent) }
 }
 
 /// Thirty days of token use as bars, today on the right.

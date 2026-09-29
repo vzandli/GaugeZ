@@ -13,6 +13,7 @@ struct HorizontalRailView: View {
     @EnvironmentObject private var store: UsageStore
     @ObservedObject var state: EdgePanelState
     let actions: EdgePanelActions
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -69,6 +70,18 @@ struct HorizontalRailView: View {
                            alignment: top ? .trailing : .leading)
                     .rotationEffect(.degrees(-90))
                     .frame(width: railLength, height: depth)
+                    // Joined to the notch, the rail is a drop of glass spreading out from under
+                    // the camera, and drawing back into one — see `NotchMotion.drip`.
+                    .mask {
+                        if top, let notch = state.joinedNotch {
+                            GlassDropMask(spread: state.isExpanded ? 1 : 0,
+                                          dropWidth: notch.width * NotchMotion.dropWidthFraction)
+                                .animation(reduceMotion ? nil : NotchMotion.spread(opening: state.isExpanded),
+                                           value: state.isExpanded)
+                        } else {
+                            Rectangle()
+                        }
+                    }
                     // The grip, outside the rotation — see `EdgeRailView.showsResizeGrip`.
                     // In the middle of the inner edge, which is the middle of the body too:
                     // the shoulder and the foot are the same length.
@@ -83,13 +96,24 @@ struct HorizontalRailView: View {
             // The inset band above holds the menu bar and the hardware notch; nothing is drawn in it.
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
             .overlay(alignment: .top) {
-                // Joined to the notch, the notch itself is the hover target while the rail rests.
-                if top, let notch = state.joinedNotch, !state.isExpanded {
-                    Color.clear
-                        .frame(width: notch.width, height: notch.height)
-                        .contentShape(Rectangle())
-                        .onHover(perform: actions.railHover)
-                        .accessibilityHidden(true)
+                // Joined to the notch, the notch itself is the hover target while the rail rests,
+                // widened with a ring either side of it when that is on.
+                if top, let notch = state.joinedNotch {
+                    let perSide = store.notchRingsEnabled
+                        ? NotchEarsMetrics.perSide(count: store.railProviders.count, notch: notch, available: geometry.size.width)
+                        : 0
+                    if perSide > 0 {
+                        // Always there while joined: opening the rail draws the band back into
+                        // the housing, and closing it lets the band grow out again.
+                        NotchEarsView(notch: notch, perSide: perSide, extended: !state.isExpanded,
+                                      onHover: actions.railHover)
+                    } else if !state.isExpanded {
+                        Color.clear
+                            .frame(width: notch.width, height: notch.height)
+                            .contentShape(Rectangle())
+                            .onHover(perform: actions.railHover)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
         }
@@ -103,6 +127,8 @@ struct HorizontalRailView: View {
             UsageDetailCard(snapshot: store.snapshot(for: provider), openProvider: { store.open(provider) })
         case .settings:
             AttachedSettingsView(actions: actions)
+        case .update:
+            RailUpdateCard(actions: actions)
         }
     }
 

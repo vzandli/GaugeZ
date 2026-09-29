@@ -56,7 +56,8 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selection: $destination, enabledCount: store.enabledProviders.count)
+            SettingsSidebar(selection: $destination, enabledCount: store.enabledProviders.count,
+                            updatePending: updateManager.pendingUpdateVersion != nil)
 
             Rectangle()
                 .fill(SettingsPalette.divider)
@@ -127,11 +128,18 @@ private struct UpdatesSettingsPage: View {
                     title: "Current version",
                     subtitle: LocalizedStringKey(updateManager.currentVersion)
                 ) {
-                    Button("Check Now") {
-                        updateManager.checkForUpdates()
+                    if let version = updateManager.pendingUpdateVersion {
+                        Button("Update to \(version)") {
+                            updateManager.checkForUpdates()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Check Now") {
+                            updateManager.checkForUpdates()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!updateManager.canCheckForUpdates)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!updateManager.canCheckForUpdates)
                 }
 
                 if let message = updateManager.outcome.message {
@@ -161,6 +169,7 @@ private struct UpdatesSettingsPage: View {
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsDestination
     let enabledCount: Int
+    var updatePending = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -213,6 +222,12 @@ private struct SettingsSidebar: View {
                                         Color.white.opacity(selection == item ? 0.15 : 0.07),
                                         in: Capsule()
                                     )
+                            }
+                            if item == .updates, updatePending {
+                                Circle()
+                                    .fill(Color(red: 1, green: 0.27, blue: 0.23))
+                                    .frame(width: 8, height: 8)
+                                    .accessibilityLabel("Update available")
                             }
                         }
                         .foregroundStyle(selection == item ? .white : SettingsPalette.secondary)
@@ -354,6 +369,9 @@ private struct ProviderSettingsRow: View {
     let move: (Int) -> Void
     let openProvider: () -> Void
     @EnvironmentObject private var store: UsageStore
+    @State private var isRenaming = false
+    @State private var draftName = ""
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -367,11 +385,7 @@ private struct ProviderSettingsRow: View {
                 }
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(provider.displayName)
-                    .help(provider.sourceDescription)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(SettingsPalette.primary)
-                    .lineLimit(2)
+                nameField
                 HealthBadge(health: snapshot.health)
             }
             .frame(width: 100, alignment: .leading)
@@ -450,6 +464,46 @@ private struct ProviderSettingsRow: View {
         .settingsCard()
         .opacity(enabled ? 1 : 0.62)
         .animation(.easeOut(duration: 0.18), value: enabled)
+    }
+
+    /// The account's name, renamed in place: click it, type, Return. A blank name goes back
+    /// to the account's own.
+    @ViewBuilder
+    private var nameField: some View {
+        if isRenaming {
+            TextField(provider.defaultName, text: $draftName)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(SettingsPalette.primary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .focused($nameFocused)
+                .onSubmit(commitName)
+                .onExitCommand { isRenaming = false }
+                .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
+                .onAppear { nameFocused = true }
+        } else {
+            Button {
+                draftName = provider.displayName
+                isRenaming = true
+            } label: {
+                Text(provider.displayName)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(SettingsPalette.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.plain)
+            .help(provider.sourceDescription + "\n\n" + String(localized: "Click to rename this account.", bundle: .language))
+            .accessibilityHint(Text("Click to rename this account."))
+        }
+    }
+
+    private func commitName() {
+        guard isRenaming else { return }
+        isRenaming = false
+        store.rename(provider, to: draftName)
     }
 
     /// Stacked up/down chevrons that shift the provider's place in the rail.
@@ -860,6 +914,23 @@ private struct AppearanceSettingsPage: View {
                 }
             }
 
+            SettingsGroup("Menu bar") {
+                SettingsControlRow(title: "Readings in the menu bar", subtitle: "What is left and when it resets, for the accounts you pick") {
+                    Menu {
+                        ForEach(store.visibleProviders) { provider in
+                            Toggle(provider.displayName, isOn: Binding(
+                                get: { store.menuBarProviderIDs.contains(provider.rawValue) },
+                                set: { store.setMenuBarReading(provider, shown: $0) }
+                            ))
+                        }
+                    } label: {
+                        Text(menuBarSummary)
+                    }
+                    .fixedSize()
+                    .disabled(!store.appPresence.wantsStatusItem)
+                }
+            }
+
             SettingsGroup("Look") {
                 SettingsControlRow(title: "Notch size", subtitle: "Use the slider or drag the notch's inner edge") {
                     HStack(spacing: 8) {
@@ -877,6 +948,16 @@ private struct AppearanceSettingsPage: View {
                             .controlSize(.small)
                             .disabled(store.railScale == 1.0)
                     }
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Color ramp", subtitle: "Rings shift color smoothly from empty to full instead of stepping") {
+                    Toggle("Color ramp", isOn: $store.colorRampEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
+                }
+                SettingsRowDivider()
+                SettingsControlRow(title: "Rings beside the notch", subtitle: "On a MacBook's top edge, show small rings either side of the camera while the rail rests") {
+                    Toggle("Rings beside the notch", isOn: $store.notchRingsEnabled)
+                        .labelsHidden().toggleStyle(SettingsPalette.toggle)
                 }
                 SettingsRowDivider()
                 SettingsControlRow(title: "Surface", subtitle: "Choose the rail material") {
@@ -940,6 +1021,16 @@ private struct AppearanceSettingsPage: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             }
+        }
+    }
+
+    private var menuBarSummary: String {
+        guard store.appPresence.wantsStatusItem else { return String(localized: "No menu bar item", bundle: .language) }
+        let chosen = store.menuBarProviders
+        switch chosen.count {
+        case 0: return String(localized: "Icon only", bundle: .language)
+        case 1: return chosen[0].displayName
+        default: return String.localizedStringWithFormat(String(localized: "%lld accounts", bundle: .language), Int64(chosen.count))
         }
     }
 

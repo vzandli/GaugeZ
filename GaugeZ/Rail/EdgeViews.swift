@@ -7,6 +7,8 @@ import SwiftUI
 enum EdgeAttachment: Hashable {
     case detail(ProviderID)
     case settings
+    /// A new version, offered with Update and Later.
+    case update
 }
 
 /// Observable state the hosting view renders from, so SwiftUI animates transitions instead of
@@ -43,6 +45,8 @@ struct EdgePanelActions {
     var resizeGripFrameChanged: (CGRect) -> Void = { _ in }
     /// A resize drag began or ended, so the cursor is held through it.
     var railResizeChanged: (Bool) -> Void = { _ in }
+    /// The update card's Update or Later.
+    var updateChosen: (_ install: Bool) -> Void = { _ in }
 }
 
 /// Geometry shared by the views and the window controller. Points.
@@ -242,8 +246,8 @@ struct RailDragHandle: View {
             }
         }
         .contentShape(Rectangle())
-        .help(store.edgeSide.isHorizontal ? "Drag horizontally to reposition GaugeZ" : "Drag vertically to reposition GaugeZ")
-        .accessibilityLabel(store.edgeSide.isHorizontal ? "Drag handle to reposition GaugeZ horizontally" : "Drag handle to reposition GaugeZ vertically")
+        .help("Drag to move GaugeZ along any edge and round the corners")
+        .accessibilityLabel("Drag handle to move GaugeZ")
     }
 
     private var dragAffordance: some View {
@@ -566,6 +570,7 @@ struct EdgeRailView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
+    @EnvironmentObject private var updates: UpdateManager
     @State private var gearZoneHovered = false
     /// The gear's rim sweep, run each time the pointer arrives on it.
     @State private var gearSweep: Double = 0
@@ -616,7 +621,8 @@ struct EdgeRailView: View {
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame in
             DebugLog.write("rail frame x=\(Int(frame.minX)) w=\(Int(frame.width)) y=\(Int(frame.minY)) h=\(Int(frame.height))")
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.1) : .spring(duration: 0.2, bounce: 0.1), value: expanded)
+        .animation(reduceMotion ? .easeOut(duration: 0.1)
+                   : (state.joinedNotch != nil ? NotchMotion.drip(opening: expanded) : .spring(duration: 0.2, bounce: 0.1)), value: expanded)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("GaugeZ usage rail")
     }
@@ -629,7 +635,11 @@ struct EdgeRailView: View {
                 ForEach(Array(providers.enumerated()), id: \.element) { index, provider in
                     ProviderMeterView(
                         snapshot: store.snapshot(for: provider),
-                        revealIndex: index,
+                        // Out of the notch the rings fill in from the middle, where the drop
+                        // lands, towards its ends; elsewhere from the head down.
+                        revealIndex: state.joinedNotch != nil
+                            ? Int(abs(Double(index) - Double(providers.count - 1) / 2).rounded(.up))
+                            : index,
                         isHighlighted: state.hoveredProvider == provider || state.attachment == .detail(provider),
                         onHover: { inside in actions.providerHover(inside ? provider : nil) },
                         onSelect: { openApp in
@@ -717,6 +727,17 @@ struct EdgeRailView: View {
                 shadowed: false
             ))
             .modifier(RimSweep(shape: Circle(), lineWidth: 1.5, progress: gearSweep))
+            .overlay(alignment: .topTrailing) {
+                // A new version waiting: kept in reach after its card was put off.
+                if updates.pendingUpdateVersion != nil {
+                    Circle()
+                        .fill(Color(red: 1, green: 0.27, blue: 0.23))
+                        .frame(width: 8 * scale, height: 8 * scale)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.5), lineWidth: 1))
+                        .offset(x: -2 * scale, y: 2 * scale)
+                        .accessibilityLabel("Update available")
+                }
+            }
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -733,6 +754,14 @@ struct EdgeRailView: View {
                 store.refresh()
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
+            }
+
+            if let version = updates.pendingUpdateVersion {
+                Button {
+                    actions.updateChosen(true)
+                } label: {
+                    Label("Update to \(version)…", systemImage: "arrow.down.circle")
+                }
             }
 
             Button {
@@ -879,6 +908,8 @@ private struct AttachmentColumn: View {
             UsageDetailCard(snapshot: store.snapshot(for: provider), openProvider: { store.open(provider) })
         case .settings:
             AttachedSettingsView(actions: actions)
+        case .update:
+            RailUpdateCard(actions: actions)
         }
     }
 
@@ -887,7 +918,7 @@ private struct AttachmentColumn: View {
         case .detail(let provider):
             let index = providers.firstIndex(of: provider) ?? 0
             return RailMetrics.rowCenterY(index: index, scale: scale)
-        case .settings:
+        case .settings, .update:
             return shapeHeight / 2
         }
     }

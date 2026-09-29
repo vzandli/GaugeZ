@@ -77,7 +77,14 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         try container.encode(rawValue)
     }
 
+    /// What the user called this account in Settings, or else its own name. Used everywhere
+    /// a provider is named, so a rename shows on the rail, the cards, the menu and the alerts
+    /// at once.
     var displayName: String {
+        ProviderNicknames.name(for: self) ?? defaultName
+    }
+
+    var defaultName: String {
         switch kind {
         case .claude: profileSlug.map { "Claude (\($0))" } ?? "Claude"
         case .cursor: "Cursor"
@@ -183,6 +190,35 @@ struct ProviderID: RawRepresentable, Hashable, Codable, Identifiable, Sendable, 
         case .minimax: String(localized: "Reads MiniMax Coding Plan usage with a key you add in Settings.", bundle: .language)
         case .gemini: String(localized: "Counts Gemini tokens from local CLI logs against a monthly budget you set.", bundle: .language)
         }
+    }
+}
+
+/// Names given to accounts in Settings, keyed by provider ID. Read from any thread, since
+/// providers and session readers name themselves off the main actor.
+enum ProviderNicknames {
+    private static let key = "providerNicknames"
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var names: [String: String] =
+        UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+
+    static func name(for provider: ProviderID) -> String? {
+        lock.withLock { names[provider.rawValue] }
+    }
+
+    /// A blank name, or the account's own, clears it.
+    static func set(_ name: String?, for provider: ProviderID) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let value = trimmed.isEmpty || trimmed == provider.defaultName ? nil : String(trimmed.prefix(40))
+        let snapshot = lock.withLock {
+            names[provider.rawValue] = value
+            return names
+        }
+        UserDefaults.standard.set(snapshot, forKey: key)
+    }
+
+    static func removeAll() {
+        lock.withLock { names = [:] }
+        UserDefaults.standard.removeObject(forKey: key)
     }
 }
 
