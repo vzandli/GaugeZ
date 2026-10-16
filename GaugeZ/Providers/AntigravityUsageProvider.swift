@@ -88,14 +88,19 @@ actor AntigravityUsageProvider: UsageProviding {
     }
 
     private func fetchLocalSnapshot() async throws -> UsageSnapshot {
-        let servers = try AntigravityProcessLocator.runningServers()
-        guard !servers.isEmpty else {
-            throw AntigravityProviderError.notRunning(installed: AntigravityProcessLocator.isInstalled)
+        var servers = try AntigravityProcessLocator.runningServers()
+        if servers.isEmpty {
+            // The server does not need the IDE: it reads the same credential from the login
+            // keychain either way. A closed IDE is a reason to start one, not to give up.
+            guard let own = try AntigravityStandaloneServer.shared.serverOrStart() else {
+                throw AntigravityProviderError.notRunning(installed: AntigravityProcessLocator.isInstalled)
+            }
+            servers = [own]
         }
 
         var lastError: Error = AntigravityProviderError.noReachableServer
         for server in servers {
-            let ports = try AntigravityProcessLocator.listeningPorts(pid: server.pid)
+            let ports = try await Self.portsAwaitingBind(of: server)
             for port in ports {
                 for scheme in ["https", "http"] {
                     let endpoint = Endpoint(scheme: scheme, port: port, csrfToken: server.csrfToken)
@@ -110,7 +115,9 @@ actor AntigravityUsageProvider: UsageProviding {
                             planName: account?.plan,
                             windows: windows,
                             observedAt: .now,
-                            source: "\(server.kind.displayName) language server",
+                            source: server.startedByGaugeZ
+                                ? "Antigravity language server started by GaugeZ"
+                                : "\(server.kind.displayName) language server",
                             health: .live
                         )
                     } catch is CancellationError {
@@ -122,6 +129,17 @@ actor AntigravityUsageProvider: UsageProviding {
             }
         }
         throw lastError
+    }
+
+    /// A server GaugeZ just started binds within a fraction of a second, but `lsof` asked too
+    /// soon sees nothing. Bounded so one that never binds costs one poll's wait and no more.
+    private static func portsAwaitingBind(of server: AntigravityProcessLocator.Server) async throws -> [Int] {
+        guard server.startedByGaugeZ else { return try AntigravityProcessLocator.listeningPorts(pid: server.pid) }
+        for _ in 0..<40 {
+            if let ports = try? AntigravityProcessLocator.listeningPorts(pid: server.pid) { return ports }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw AntigravityProviderError.noListeningPorts
     }
 
     private struct Endpoint {
@@ -198,11 +216,42 @@ enum AntigravityProcessLocator {
         let pid: Int32
         let kind: Kind
         let csrfToken: String
+        var startedByGaugeZ = false
     }
 
+    static let appBundles = ["/Applications/Antigravity.app", "/Applications/Antigravity IDE.app",
+                             NSHomeDirectory() + "/Applications/Antigravity.app",
+                             NSHomeDirectory() + "/Applications/Antigravity IDE.app"]
+
     static var isInstalled: Bool {
-        ["/Applications/Antigravity.app", "/Applications/Antigravity IDE.app"]
-            .contains { FileManager.default.fileExists(atPath: $0) }
+        appBundles.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// The language server inside an installed Antigravity bundle, runnable on its own.
+    static func serverBinaryURL(fileManager: FileManager = .default) -> URL? {
+        for bundle in appBundles {
+            for relative in ["Contents/Resources/bin/language_server",
+                             "Contents/Resources/app/extensions/antigravity/bin/language_server"] {
+                let path = bundle + "/" + relative
+                if fileManager.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
+            }
+        }
+        return nil
+    }
+
+    /// The flags the IDE passes its own server, minus everything that wires it to a running
+    /// IDE. `--standalone` is what makes it legal to start without one. The port is left at 0
+    /// so the server picks one and `lsof` finds it, as for the IDE's own.
+    static func standaloneArguments(token: String, appDataDir: String = "gaugez-antigravity") -> [String] {
+        ["--standalone",
+         "--override_ide_name", "antigravity",
+         "--subclient_type", "hub",
+         "--override_user_agent_name", "antigravity",
+         "--https_server_port", "0",
+         "--csrf_token", token,
+         "--app_data_dir", appDataDir,
+         "--api_server_url", "https://generativelanguage.googleapis.com",
+         "--cloud_code_endpoint", "https://daily-cloudcode-pa.googleapis.com"]
     }
 
     /// Language servers launched by the Antigravity app or IDE, app first.
@@ -634,5 +683,54 @@ enum AntigravityProviderError: LocalizedError, ProviderHealthDescribing {
         case .noListeningPorts, .noReachableServer, .transport: return .stale(message)
         default: return .unavailable(message)
         }
+    }
+}
+
+/// A language server GaugeZ started itself, kept for as long as the app runs.
+///
+/// Held rather than restarted per poll: it listens within a tenth of a second but spends
+/// several more authenticating with Google. Only ever started when none is running, so it
+/// never competes with an IDE; once up, the process listing finds it like any other.
+final class AntigravityStandaloneServer: @unchecked Sendable {
+    static let shared = AntigravityStandaloneServer()
+
+    private let lock = NSLock()
+    private var process: Process?
+    private var server: AntigravityProcessLocator.Server?
+    /// Set when the binary refused to launch, so a broken install is not retried every poll.
+    private var launchFailedAt: Date?
+
+    func serverOrStart() throws -> AntigravityProcessLocator.Server? {
+        lock.lock(); defer { lock.unlock() }
+        if let server, process?.isRunning == true { return server }
+        server = nil
+        process = nil
+        if let launchFailedAt, Date().timeIntervalSince(launchFailedAt) < 600 { return nil }
+        guard let binary = AntigravityProcessLocator.serverBinaryURL() else { return nil }
+
+        let token = UUID().uuidString
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = AntigravityProcessLocator.standaloneArguments(token: token)
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch {
+            launchFailedAt = Date()
+            return nil
+        }
+        launchFailedAt = nil
+        let started = AntigravityProcessLocator.Server(pid: process.processIdentifier, kind: .app,
+                                                      csrfToken: token, startedByGaugeZ: true)
+        self.process = process
+        self.server = started
+        return started
+    }
+
+    /// Called as the app quits; the server has no reason to outlive it.
+    func stop() {
+        lock.lock(); defer { lock.unlock() }
+        if process?.isRunning == true { process?.terminate() }
+        process = nil
+        server = nil
     }
 }

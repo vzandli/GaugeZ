@@ -158,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         statusItem = nil
+        AntigravityStandaloneServer.shared.stop()
         if let settingsObserver {
             NotificationCenter.default.removeObserver(settingsObserver)
         }

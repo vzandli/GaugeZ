@@ -24,6 +24,16 @@ struct ReleaseNote: Equatable {
 enum ReleaseNotes {
     static let all: [ReleaseNote] = [
         ReleaseNote(
+            version: "1.0.16",
+            headline: "Only the sessions you can see.",
+            changes: [
+                .init("Sessions you actually have open",
+                      "A Claude session paused with ctrl-Z, or one a background tool runs with no terminal, no longer shows up or chimes."),
+                .init("Antigravity without the IDE",
+                      "GaugeZ reads your Antigravity quota even when the app is closed, and tidies up after itself when you quit.")
+            ]
+        ),
+        ReleaseNote(
             version: "1.0.15",
             headline: "Carry the rail round the corners.",
             changes: [

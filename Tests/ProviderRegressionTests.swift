@@ -919,6 +919,40 @@ struct ProviderRegressionTests {
         try JSONSerialization.data(withJSONObject: registry).write(to: registryFile)
         let waitingSessions = await activityReader.readClaudeSessions(profile: liveProfile)
         try expect(waitingSessions.first?.state == .waiting && waitingSessions.first?.isInferred == false, "Explicit registry waiting takes precedence over transcript")
+        // A session suspended with ctrl-Z is left out until it is resumed.
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        try sleeper.run()
+        defer { sleeper.terminate() }
+        let sleeperStart = ActivityReader.processStart(sleeper.processIdentifier)!
+        let stoppedRecord: [String: Any] = ["pid": sleeper.processIdentifier, "cwd": "/fixture/app",
+                                            "startedAt": sleeperStart.timeIntervalSince1970 * 1000, "status": "idle"]
+        let stoppedFile = liveProfile.sessionsDirectory.appendingPathComponent("stopped.json")
+        try JSONSerialization.data(withJSONObject: stoppedRecord).write(to: stoppedFile)
+        kill(sleeper.processIdentifier, SIGSTOP)
+        for _ in 0..<50 where !ActivityReader.isStopped(sleeper.processIdentifier) { try await Task.sleep(for: .milliseconds(20)) }
+        try expect(ActivityReader.isStopped(sleeper.processIdentifier), "SIGSTOP is seen as stopped")
+        let withStopped = await activityReader.readClaudeSessions(profile: liveProfile)
+        try expect(!withStopped.contains { $0.pid == sleeper.processIdentifier }, "A stopped session is left out")
+        kill(sleeper.processIdentifier, SIGCONT)
+        for _ in 0..<50 where ActivityReader.isStopped(sleeper.processIdentifier) { try await Task.sleep(for: .milliseconds(20)) }
+        let resumed = await activityReader.readClaudeSessions(profile: liveProfile)
+        try expect(resumed.contains { $0.pid == sleeper.processIdentifier && $0.state == .idle }, "A resumed session is listed again")
+        // A session a program started is kept only while somebody can be at it. The sleeper has no
+        // tty of its own; whether an application sits above it depends on where the tests run, so
+        // only the two unambiguous answers are checked: a non-SDK entrypoint is never asked, and an
+        // SDK one follows `isAttended`.
+        var sdkRecord = stoppedRecord
+        sdkRecord["entrypoint"] = "sdk-ts"
+        try JSONSerialization.data(withJSONObject: sdkRecord).write(to: stoppedFile)
+        let sdk = await activityReader.readClaudeSessions(profile: liveProfile)
+        try expect(sdk.contains { $0.pid == sleeper.processIdentifier } == ActivityReader.isAttended(sleeper.processIdentifier), "An SDK session is listed exactly when attended")
+        sdkRecord["entrypoint"] = "cli"
+        try JSONSerialization.data(withJSONObject: sdkRecord).write(to: stoppedFile)
+        let cli = await activityReader.readClaudeSessions(profile: liveProfile)
+        try expect(cli.contains { $0.pid == sleeper.processIdentifier }, "A CLI session is never asked whether it is attended")
+        try? FileManager.default.removeItem(at: stoppedFile)
         let renewal = ClaudeTokenRenewal()
         let profile = ClaudeProfile(home: root)
         let now = Date()
@@ -958,6 +992,10 @@ struct ProviderRegressionTests {
         let fromOMP = try AntigravityCredentials.load(home: root, keychain: { throw SecretError.missing("fixture") })
         try expect(fromOMP.accessToken == "omp-fixture" && fromOMP.projectId == "fixture-project", "OMP WAL credentials are selected only for google-antigravity")
         let flat = #"{"buckets":[{"modelId":"gemini-test","bucketId":"daily","remainingFraction":0.25,"resetTime":"2027-01-01T00:00:00Z"},{"modelId":"claude-test","bucketId":"daily","remainingFraction":0.5}]}"#
+        let standalone = AntigravityProcessLocator.standaloneArguments(token: "fixture-token")
+        try expect(standalone.first == "--standalone" && standalone.contains("fixture-token") && standalone.contains("0"), "Standalone server arguments carry the token and an unbound port")
+        let spawnedCommand = "/Applications/Antigravity.app/Contents/Resources/bin/language_server " + standalone.joined(separator: " ")
+        try expect(AntigravityProcessLocator.servers(fromProcessListing: "4242 " + spawnedCommand).first.map { $0.kind == .app && $0.csrfToken == "fixture-token" } == true, "A server GaugeZ started is found by the process listing like the IDE's own")
         let windows = try AntigravityQuotaParser.remoteWindows(from: Data(flat.utf8))
         try expect(windows.count == 2 && windows[0].remainingPercent == 25 && windows[0].resetsAt != nil, "Daily quota fractions retain distinct model families")
         try rejects({ _ = try AntigravityQuotaParser.remoteWindows(from: Data(#"{"buckets":[{"modelId":"bad","remainingFraction":true}]}"#.utf8)) }, "Boolean cannot become free quota")

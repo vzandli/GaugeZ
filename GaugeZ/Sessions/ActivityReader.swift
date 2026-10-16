@@ -74,7 +74,15 @@ actor ActivityReader {
                   let pid = (record["pid"] as? NSNumber)?.int32Value, pid > 0,
                   !ClaudeRenewalProcess.contains(pid),
                   let cwd = record["cwd"] as? String,
-                  let processStart = Self.processStart(pid) else { return nil }
+                  let processStart = Self.processStart(pid),
+                  // Suspended with ctrl-Z: alive and registered, but nobody has it open until `fg`.
+                  !Self.isStopped(pid),
+                  // A program started it (`sdk-ts`, `sdk-py`, or `claude -p` as `sdk-cli`). Headless
+                  // workers such as claude-mem's run one per observed session with no terminal and a
+                  // daemon above them; each would spin the ring and announce a finished turn.
+                  // One typed into a terminal keeps its tty, and one an editor drives through the SDK
+                  // has that application above it, so both stay.
+                  !((record["entrypoint"] as? String)?.hasPrefix("sdk-") == true) || Self.isAttended(pid) else { return nil }
             let registered: Date?
             if let millis = (record["startedAt"] as? NSNumber)?.doubleValue, millis.isFinite {
                 registered = Date(timeIntervalSince1970: millis / 1000)
@@ -336,6 +344,37 @@ actor ActivityReader {
             let left = ranks[$0.state, default: 3], right = ranks[$1.state, default: 3]
             return left == right ? $0.id < $1.id : left < right
         }
+    }
+
+    /// Whether the process is stopped (SIGSTOP, usually ctrl-Z). Still alive, but doing nothing.
+    nonisolated static func isStopped(_ pid: Int32) -> Bool {
+        var process = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var query: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&query, u_int(query.count), &process, &size, nil, 0) == 0, size > 0 else { return false }
+        return Int32(process.kp_proc.p_stat) == SSTOP
+    }
+
+    /// Whether somebody can be at this process: it has a controlling terminal, or an application
+    /// bundle somewhere above it in the process tree. A daemon's chain runs straight to launchd.
+    nonisolated static func isAttended(_ pid: Int32) -> Bool {
+        var current = pid
+        var hops = 0
+        while current > 1, hops < 32 {
+            var process = kinfo_proc()
+            var size = MemoryLayout<kinfo_proc>.stride
+            var query: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, current]
+            guard sysctl(&query, u_int(query.count), &process, &size, nil, 0) == 0, size > 0 else { return false }
+            if hops == 0, process.kp_eproc.e_tdev != -1 { return true }
+            var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            if proc_pidpath(current, &buffer, UInt32(buffer.count)) > 0,
+               String(cString: buffer).contains(".app/Contents/") { return true }
+            let parent = process.kp_eproc.e_ppid
+            guard parent != current else { return false }
+            current = parent
+            hops += 1
+        }
+        return false
     }
 
     nonisolated static func processStart(_ pid: Int32) -> Date? {
